@@ -25,17 +25,29 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	FVector CellToWorldCenter(FIntPoint Cell) const;
 
+	UFUNCTION(BlueprintPure, Category = "Grid World")
+	EPSTileType GetGroundTile(FIntPoint Cell) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
-	bool ToggleGroundTile(FIntPoint Cell);
+	EPSTileInteractionResult InteractWithCell(FIntPoint Cell);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	bool ResetWorld();
+
+	UFUNCTION(CallInEditor, Category = "Grid World|Editor Preview", meta = (DisplayName = "Generate Grid Preview"))
+	void GenerateEditorPreview();
+
+	UFUNCTION(CallInEditor, Category = "Grid World|Editor Preview", meta = (DisplayName = "Clear Grid Preview"))
+	void ClearEditorPreview();
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	float GetCellSize() const { return CellSize; }
 
 protected:
 	virtual void BeginPlay() override;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid World")
+	TObjectPtr<USceneComponent> SceneRoot;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World", meta = (ClampMin = "1.0"))
 	float CellSize = 100.0f;
@@ -58,12 +70,22 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Rendering")
 	TSubclassOf<APSTileChunkActor> ChunkActorClass;
 
+#if WITH_EDITORONLY_DATA
+	UPROPERTY(EditAnywhere, Category = "Grid World|Editor Preview", meta = (ClampMin = "1", ClampMax = "128"))
+	int32 EditorPreviewHalfExtentInCells = 50;
+
+	UPROPERTY(VisibleInstanceOnly, Category = "Grid World|Editor Preview")
+	TObjectPtr<APSTileChunkActor> EditorPreviewActor;
+#endif
+
 private:
+	EPSTileType GenerateGroundTile(FIntPoint Cell) const;
 	FPSChunkData GenerateChunk(FIntPoint ChunkCoordinate) const;
 	FPSChunkData& GetOrCreateChunk(FIntPoint ChunkCoordinate);
 	void UpdateActiveChunks(FIntPoint PlayerChunk);
 	void SpawnChunkRenderer(FIntPoint ChunkCoordinate);
 	void RebuildChunk(FIntPoint ChunkCoordinate);
+	bool SetGroundTile(FIntPoint Cell, EPSTileType GroundType);
 	bool IsCellInsideWorld(FIntPoint Cell) const;
 	void LoadWorld();
 	void SaveWorld() const;

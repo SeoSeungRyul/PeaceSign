@@ -6,9 +6,13 @@
 #include "PaperCharacter.h"
 #include "PSPlayerCharacter.generated.h"
 
+class UPSPlayerStatsComponent;
 class UCameraComponent;
 class UInputAction;
+class UPaperFlipbook;
+class UPaperSprite;
 class USpringArmComponent;
+class UTexture2D;
 struct FInputActionValue;
 
 UCLASS()
@@ -18,8 +22,13 @@ class PEACESIGN_API APSPlayerCharacter : public APaperCharacter
 
 public:
 	APSPlayerCharacter();
+	virtual void Tick(float DeltaSeconds) override;
+	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stats")
+	TObjectPtr<UPSPlayerStatsComponent> StatsComponent;
 
 protected:
+	virtual void BeginPlay() override;
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 	// Camera components are created in C++ and tuned in a Blueprint child.
@@ -33,6 +42,72 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> MoveAction;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement", meta = (ClampMin = "0.0"))
+	float TemporaryMoveSpeed = 300.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement", meta = (ClampMin = "0.0"))
+	float RunSpeed = 1000.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Stamina", meta = (ClampMin = "0.0"))
+	float RunStaminaCostPerSecond = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.01"))
+	float RollDuration = 0.3f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.0"))
+	float RollDistance = 450.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.0"))
+	float RollStaminaCost = 10.0f;
+
 private:
 	void Move(const FInputActionValue& Value);
+	void StartRoll(const FVector2D& MovementInput);
+	void TickRoll(float DeltaSeconds);
+	void SetFacingFromInput(const FVector2D& MovementInput);
+	UPaperFlipbook* CreateIdleFlipbook(UTexture2D* Texture, const FName& ObjectName);
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> FrontTexture;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> BackTexture;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> LeftTexture;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> RightTexture;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperSprite> FrontSprite;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperSprite> BackSprite;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperSprite> LeftSprite;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperSprite> RightSprite;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperFlipbook> FrontIdle;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperFlipbook> BackIdle;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperFlipbook> LeftIdle;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPaperFlipbook> RightIdle;
+
+	bool bReceivedEnhancedMoveThisFrame = false;
+	bool bWasRollKeyDown = false;
+	bool bIsRolling = false;
+	float RollTimeRemaining = 0.0f;
+	FVector2D LastMovementInput = FVector2D(0.0f, -1.0f);
+	FVector RollWorldDirection = FVector(-1.0f, 0.0f, 0.0f);
+	ECollisionEnabled::Type CollisionBeforeRoll = ECollisionEnabled::QueryAndPhysics;
 };

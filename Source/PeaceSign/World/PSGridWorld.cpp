@@ -27,14 +27,34 @@ APSGridWorld::APSGridWorld()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.TickInterval = 0.1f;
+
+	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
+	SetRootComponent(SceneRoot);
+
 	ChunkActorClass = APSTileChunkActor::StaticClass();
 }
 
 void APSGridWorld::BeginPlay()
 {
 	Super::BeginPlay();
+
+#if WITH_EDITOR
+	if (IsValid(EditorPreviewActor))
+	{
+		EditorPreviewActor->SetActorHiddenInGame(true);
+		EditorPreviewActor->SetActorEnableCollision(false);
+	}
+#endif
+
 	StartingWorldSeed = WorldSeed;
 	LoadWorld();
+
+	if (const APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
+	{
+		const FIntPoint PlayerChunk = PSGrid::CellToChunk(WorldToCell(PlayerPawn->GetActorLocation()), ChunkSize);
+		UpdateActiveChunks(PlayerChunk);
+		LastPlayerChunk = PlayerChunk;
+	}
 }
 
 void APSGridWorld::Tick(const float DeltaSeconds)
@@ -65,26 +85,53 @@ FVector APSGridWorld::CellToWorldCenter(const FIntPoint Cell) const
 	return GetActorLocation() + PSGrid::CellToWorldCenter(Cell, CellSize, 2.0f);
 }
 
-bool APSGridWorld::ToggleGroundTile(const FIntPoint Cell)
+EPSTileType APSGridWorld::GetGroundTile(const FIntPoint Cell) const
 {
 	if (!IsCellInsideWorld(Cell))
 	{
-		return false;
+		return EPSTileType::Empty;
 	}
 
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
-	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
-	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
-	Tile.GroundType = Tile.GroundType == EPSTileType::Dirt ? EPSTileType::Grass : EPSTileType::Dirt;
+	const int32 CellIndex = PSGrid::LocalToIndex(LocalCell, ChunkSize);
+	if (const FPSChunkData* LoadedChunk = LoadedChunks.Find(ChunkCoordinate))
+	{
+		if (LoadedChunk->Cells.IsValidIndex(CellIndex))
+		{
+			return LoadedChunk->Cells[CellIndex].GroundType;
+		}
+	}
 
-	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
-	SavedChunk.Coordinate = ChunkCoordinate;
-	SavedChunk.Cells = Chunk.Cells;
+	if (const FPSChunkSaveData* SavedChunk = ModifiedChunks.Find(ChunkCoordinate))
+	{
+		if (SavedChunk->Cells.IsValidIndex(CellIndex))
+		{
+			return SavedChunk->Cells[CellIndex].GroundType;
+		}
+	}
 
-	RebuildChunk(ChunkCoordinate);
-	SaveWorld();
-	return true;
+	return GenerateGroundTile(Cell);
+}
+
+EPSTileInteractionResult APSGridWorld::InteractWithCell(const FIntPoint Cell)
+{
+	switch (GetGroundTile(Cell))
+	{
+	case EPSTileType::Grass:
+		return SetGroundTile(Cell, EPSTileType::Dirt)
+			? EPSTileInteractionResult::Tilled
+			: EPSTileInteractionResult::NoEffect;
+	case EPSTileType::Stone:
+		return SetGroundTile(Cell, EPSTileType::Dirt)
+			? EPSTileInteractionResult::Mined
+			: EPSTileInteractionResult::NoEffect;
+	case EPSTileType::Dirt:
+		return EPSTileInteractionResult::NoEffect;
+	case EPSTileType::Empty:
+	default:
+		return EPSTileInteractionResult::InvalidCell;
+	}
 }
 
 bool APSGridWorld::ResetWorld()
@@ -121,6 +168,94 @@ bool APSGridWorld::ResetWorld()
 	return true;
 }
 
+void APSGridWorld::GenerateEditorPreview()
+{
+#if WITH_EDITOR
+	if (!GetWorld() || GetWorld()->IsGameWorld() || !ChunkActorClass)
+	{
+		return;
+	}
+
+	ClearEditorPreview();
+
+	const int32 PreviewHalfExtent = FMath::Min(EditorPreviewHalfExtentInCells, WorldHalfExtentInCells);
+	const int32 PreviewSize = PreviewHalfExtent * 2;
+	FPSChunkData PreviewData;
+	PreviewData.Cells.SetNum(PreviewSize * PreviewSize);
+
+	for (int32 LocalY = 0; LocalY < PreviewSize; ++LocalY)
+	{
+		for (int32 LocalX = 0; LocalX < PreviewSize; ++LocalX)
+		{
+			const FIntPoint Cell(LocalX - PreviewHalfExtent, LocalY - PreviewHalfExtent);
+			PreviewData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), PreviewSize)].GroundType =
+				GenerateGroundTile(Cell);
+		}
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.OverrideLevel = GetLevel();
+	SpawnParameters.ObjectFlags = RF_Transactional;
+	SpawnParameters.InitialActorLabel = TEXT("Grid Preview");
+	const FVector PreviewOrigin = GetActorLocation() + FVector(
+		-static_cast<float>(PreviewHalfExtent) * CellSize,
+		-static_cast<float>(PreviewHalfExtent) * CellSize,
+		0.0f);
+	APSTileChunkActor* PreviewActor = GetWorld()->SpawnActor<APSTileChunkActor>(
+		ChunkActorClass,
+		PreviewOrigin,
+		FRotator::ZeroRotator,
+		SpawnParameters);
+	if (!PreviewActor)
+	{
+		UE_LOG(LogTemp, Error, TEXT("Unable to create grid editor preview"));
+		return;
+	}
+
+	Modify();
+	PreviewActor->bIsEditorOnlyActor = true;
+	PreviewActor->Tags.AddUnique(TEXT("PSGridEditorPreview"));
+	PreviewActor->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
+	PreviewActor->Rebuild(PreviewData, PreviewSize, CellSize);
+	EditorPreviewActor = PreviewActor;
+	GetLevel()->MarkPackageDirty();
+#endif
+}
+
+void APSGridWorld::ClearEditorPreview()
+{
+#if WITH_EDITOR
+	if (!GetWorld() || GetWorld()->IsGameWorld())
+	{
+		return;
+	}
+
+	if (!IsValid(EditorPreviewActor))
+	{
+		EditorPreviewActor = nullptr;
+		return;
+	}
+
+	Modify();
+	EditorPreviewActor->Modify();
+	EditorPreviewActor->Destroy();
+	EditorPreviewActor = nullptr;
+	GetLevel()->MarkPackageDirty();
+#endif
+}
+
+EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell))
+	{
+		return EPSTileType::Empty;
+	}
+
+	const uint32 Roll = HashCell(Cell, WorldSeed) % 100;
+	return Roll < 5 ? EPSTileType::Stone : Roll < 15 ? EPSTileType::Dirt : EPSTileType::Grass;
+}
+
 FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 {
 	FPSChunkData Chunk;
@@ -135,14 +270,7 @@ FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 				ChunkCoordinate.X * ChunkSize + LocalX,
 				ChunkCoordinate.Y * ChunkSize + LocalY);
 			FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
-			if (!IsCellInsideWorld(Cell))
-			{
-				Tile.GroundType = EPSTileType::Empty;
-				continue;
-			}
-
-			const uint32 Roll = HashCell(Cell, WorldSeed) % 100;
-			Tile.GroundType = Roll < 5 ? EPSTileType::Stone : Roll < 15 ? EPSTileType::Dirt : EPSTileType::Grass;
+			Tile.GroundType = GenerateGroundTile(Cell);
 		}
 	}
 
@@ -235,6 +363,27 @@ void APSGridWorld::RebuildChunk(const FIntPoint ChunkCoordinate)
 	{
 		ChunkActor->Rebuild(GetOrCreateChunk(ChunkCoordinate), ChunkSize, CellSize);
 	}
+}
+
+bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundType)
+{
+	if (!IsCellInsideWorld(Cell) || GroundType == EPSTileType::Empty || GetGroundTile(Cell) == GroundType)
+	{
+		return false;
+	}
+
+	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
+	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
+	Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)].GroundType = GroundType;
+
+	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
+	SavedChunk.Coordinate = ChunkCoordinate;
+	SavedChunk.Cells = Chunk.Cells;
+
+	RebuildChunk(ChunkCoordinate);
+	SaveWorld();
+	return true;
 }
 
 bool APSGridWorld::IsCellInsideWorld(const FIntPoint Cell) const

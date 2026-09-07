@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PSPlayerController.h"
+#include "PSPlayerStatsComponent.h"
+#include "UI/PSPlayerStatusWidget.h"
 
 #include "DrawDebugHelpers.h"
 #include "EnhancedInputSubsystems.h"
@@ -11,6 +13,41 @@
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
 #include "World/PSGridWorld.h"
+
+namespace
+{
+	FColor GetTileDebugColor(const EPSTileType TileType)
+	{
+		switch (TileType)
+		{
+		case EPSTileType::Grass:
+			return FColor::Green;
+		case EPSTileType::Dirt:
+			return FColor(150, 75, 20);
+		case EPSTileType::Stone:
+			return FColor::Silver;
+		case EPSTileType::Empty:
+		default:
+			return FColor::Red;
+		}
+	}
+
+	FString GetInteractionResultText(const EPSTileInteractionResult Result)
+	{
+		switch (Result)
+		{
+		case EPSTileInteractionResult::Tilled:
+			return TEXT("Grass tilled into dirt");
+		case EPSTileInteractionResult::Mined:
+			return TEXT("Stone mined into dirt");
+		case EPSTileInteractionResult::NoEffect:
+			return TEXT("This tile has no interaction yet");
+		case EPSTileInteractionResult::InvalidCell:
+		default:
+			return TEXT("Cannot interact with this cell");
+		}
+	}
+}
 
 void APSPlayerController::BeginPlay()
 {
@@ -62,6 +99,7 @@ void APSPlayerController::SetupInputComponent()
 void APSPlayerController::PlayerTick(const float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+	UpdateStatusWidget();
 	HoveredCell.Reset();
 
 	if (!GridWorld)
@@ -84,24 +122,48 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 	}
 
 	HoveredCell = GridWorld->WorldToCell(RayOrigin + RayDirection * IntersectionDistance);
-	const FVector CellCenter = GridWorld->CellToWorldCenter(HoveredCell.GetValue());
+	const FIntPoint Cell = HoveredCell.GetValue();
+	const EPSTileType TileType = GridWorld->GetGroundTile(Cell);
+	const FVector CellCenter = GridWorld->CellToWorldCenter(Cell);
 	const float HalfCell = GridWorld->GetCellSize() * 0.48f;
 	DrawDebugBox(
 		GetWorld(),
 		CellCenter,
 		FVector(HalfCell, HalfCell, 1.0f),
-		FColor::Yellow,
+		GetTileDebugColor(TileType),
 		false,
 		0.0f,
 		0,
 		2.0f);
+
+	if (GEngine)
+	{
+		const FString TileName = StaticEnum<EPSTileType>()->GetNameStringByValue(static_cast<int64>(TileType));
+		GEngine->AddOnScreenDebugMessage(
+			3,
+			0.0f,
+			GetTileDebugColor(TileType),
+			FString::Printf(
+				TEXT("Cell (%d, %d)  Tile: %s"),
+				Cell.X,
+				Cell.Y,
+				*TileName));
+	}
 }
 
 void APSPlayerController::HandlePrimaryAction()
 {
 	if (GridWorld && HoveredCell.IsSet())
 	{
-		GridWorld->ToggleGroundTile(HoveredCell.GetValue());
+		const EPSTileInteractionResult Result = GridWorld->InteractWithCell(HoveredCell.GetValue());
+		if (GEngine)
+		{
+			GEngine->AddOnScreenDebugMessage(
+				INDEX_NONE,
+				2.0f,
+				Result == EPSTileInteractionResult::InvalidCell ? FColor::Red : FColor::Yellow,
+				GetInteractionResultText(Result));
+		}
 	}
 }
 
@@ -121,4 +183,37 @@ void APSPlayerController::HandleResetWorld()
 			bResetSucceeded ? FColor::Green : FColor::Red,
 			bResetSucceeded ? TEXT("World reset complete") : TEXT("World reset failed"));
 	}
+}
+
+void APSPlayerController::UpdateStatusWidget()
+{
+	if (!IsLocalController()) return;
+	if (!StatusWidget)
+	{
+		UClass* WidgetClass = PlayerStatusWidgetClass.Get();
+		if (!WidgetClass) WidgetClass = UPSPlayerStatusWidget::StaticClass();
+		StatusWidget = CreateWidget<UPSPlayerStatusWidget>(this, WidgetClass);
+		if (!StatusWidget) return;
+		StatusWidget->AddToPlayerScreen();
+		StatusWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
+		StatusWidget->SetDesiredSizeInViewport(FVector2D(260.0f, 220.0f));
+		StatusPawn = GetPawn();
+		StatusWidget->SetStatsComponent(GetPawn() ? GetPawn()->FindComponentByClass<UPSPlayerStatsComponent>() : nullptr);
+	}
+	if (StatusPawn.IsStale() || StatusPawn.Get() != GetPawn())
+	{
+		StatusPawn = GetPawn();
+		StatusWidget->SetStatsComponent(GetPawn() ? GetPawn()->FindComponentByClass<UPSPlayerStatsComponent>() : nullptr);
+	}
+}
+
+void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (StatusWidget)
+	{
+		StatusWidget->SetStatsComponent(nullptr);
+		StatusWidget->RemoveFromParent();
+		StatusWidget = nullptr;
+	}
+	Super::EndPlay(EndPlayReason);
 }

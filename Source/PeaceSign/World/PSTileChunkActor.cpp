@@ -44,9 +44,9 @@ APSTileChunkActor::APSTileChunkActor()
 	ConfigureInstances(StoneInstances);
 }
 
-void APSTileChunkActor::BeginPlay()
+void APSTileChunkActor::OnConstruction(const FTransform& Transform)
 {
-	Super::BeginPlay();
+	Super::OnConstruction(Transform);
 	ApplyMaterials();
 }
 
@@ -62,37 +62,48 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	}
 
 	const float TileScale = CellSize / 100.0f;
+	TArray<FTransform> GrassTransforms;
+	TArray<FTransform> DirtTransforms;
+	TArray<FTransform> StoneTransforms;
+	GrassTransforms.Reserve(ChunkData.Cells.Num());
+	DirtTransforms.Reserve(ChunkData.Cells.Num());
+	StoneTransforms.Reserve(ChunkData.Cells.Num());
+
 	for (int32 LocalY = 0; LocalY < ChunkSize; ++LocalY)
 	{
 		for (int32 LocalX = 0; LocalX < ChunkSize; ++LocalX)
 		{
 			const FPSTileCell& Cell = ChunkData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
-			UHierarchicalInstancedStaticMeshComponent* TargetInstances = nullptr;
+			TArray<FTransform>* TargetTransforms = nullptr;
 			switch (Cell.GroundType)
 			{
 			case EPSTileType::Grass:
-				TargetInstances = GrassInstances;
+				TargetTransforms = &GrassTransforms;
 				break;
 			case EPSTileType::Dirt:
-				TargetInstances = DirtInstances;
+				TargetTransforms = &DirtTransforms;
 				break;
 			case EPSTileType::Stone:
-				TargetInstances = StoneInstances;
+				TargetTransforms = &StoneTransforms;
 				break;
 			default:
 				break;
 			}
 
-			if (TargetInstances)
+			if (TargetTransforms)
 			{
 				const FVector Location(
 					(static_cast<float>(LocalX) + 0.5f) * CellSize,
 					(static_cast<float>(LocalY) + 0.5f) * CellSize,
 					RenderZOffset);
-				TargetInstances->AddInstance(FTransform(FRotator::ZeroRotator, Location, FVector(TileScale)));
+				TargetTransforms->Emplace(FRotator::ZeroRotator, Location, FVector(TileScale));
 			}
 		}
 	}
+
+	GrassInstances->AddInstances(GrassTransforms, false, false, false);
+	DirtInstances->AddInstances(DirtTransforms, false, false, false);
+	StoneInstances->AddInstances(StoneTransforms, false, false, false);
 }
 
 void APSTileChunkActor::ConfigureInstances(UHierarchicalInstancedStaticMeshComponent* Instances) const
