@@ -14,6 +14,15 @@ enum class EPSTileType : uint8
 	Stone
 };
 
+UENUM(BlueprintType)
+enum class EPSTileInteractionResult : uint8
+{
+	InvalidCell,
+	NoEffect,
+	Tilled,
+	Mined
+};
+
 USTRUCT(BlueprintType)
 struct FPSTileCell
 {

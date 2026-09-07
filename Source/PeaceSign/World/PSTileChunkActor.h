@@ -18,11 +18,11 @@ class PEACESIGN_API APSTileChunkActor : public AActor
 
 public:
 	APSTileChunkActor();
+	virtual void OnConstruction(const FTransform& Transform) override;
 
 	void Rebuild(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize);
 
 protected:
-	virtual void BeginPlay() override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
 	TObjectPtr<USceneComponent> SceneRoot;

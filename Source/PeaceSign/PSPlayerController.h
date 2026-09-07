@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "PSPlayerController.generated.h"
 
+class UPSPlayerStatusWidget;
 class UInputMappingContext;
 class APSGridWorld;
 
@@ -17,6 +18,9 @@ class PEACESIGN_API APSPlayerController : public APlayerController
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<UPSPlayerStatusWidget> PlayerStatusWidgetClass;
 	virtual void SetupInputComponent() override;
 	virtual void PlayerTick(float DeltaTime) override;
 
@@ -24,6 +28,9 @@ protected:
 	TObjectPtr<UInputMappingContext> GameplayMappingContext;
 
 private:
+	void UpdateStatusWidget();
+	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
+	TWeakObjectPtr<APawn> StatusPawn;
 	void HandlePrimaryAction();
 	void HandleResetWorld();
 
