@@ -5,13 +5,16 @@
 #include "UI/PSPlayerStatusWidget.h"
 
 #include "DrawDebugHelpers.h"
+#include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "EngineUtils.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
+#include "InputAction.h"
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
+#include "UObject/ConstructorHelpers.h"
 #include "World/PSGridWorld.h"
 
 namespace
@@ -49,6 +52,29 @@ namespace
 	}
 }
 
+APSPlayerController::APSPlayerController()
+{
+	static ConstructorHelpers::FObjectFinder<UInputMappingContext> GameplayMappingContextFinder(
+		TEXT("/Game/Inputs/IMC_Gameplay.IMC_Gameplay"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> InteractActionFinder(
+		TEXT("/Game/Inputs/IA_Interact.IA_Interact"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> InventoryActionFinder(
+		TEXT("/Game/Inputs/IA_Inventory.IA_Inventory"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> QuestActionFinder(
+		TEXT("/Game/Inputs/IA_Quest.IA_Quest"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> AbilityActionFinder(
+		TEXT("/Game/Inputs/IA_Ability.IA_Ability"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> CraftActionFinder(
+		TEXT("/Game/Inputs/IA_Craft.IA_Craft"));
+
+	GameplayMappingContext = GameplayMappingContextFinder.Object;
+	InteractAction = InteractActionFinder.Object;
+	InventoryAction = InventoryActionFinder.Object;
+	QuestAction = QuestActionFinder.Object;
+	AbilityAction = AbilityActionFinder.Object;
+	CraftAction = CraftActionFinder.Object;
+}
+
 void APSPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
@@ -74,17 +100,41 @@ void APSPlayerController::BeginPlay()
 
 	UEnhancedInputLocalPlayerSubsystem* InputSubsystem =
 		ULocalPlayer::GetSubsystem<UEnhancedInputLocalPlayerSubsystem>(GetLocalPlayer());
-	UE_LOG(
-		LogTemp,
-		Warning,
-		TEXT("PeaceSign mapping setup: Controller=%s Local=%s Subsystem=%s Context=%s"),
-		*GetName(),
-		IsLocalController() ? TEXT("true") : TEXT("false"),
-		*GetNameSafe(InputSubsystem),
-		*GetNameSafe(GameplayMappingContext));
+	// UE_LOG(
+	// 	LogTemp,
+	// 	Warning,
+	// 	TEXT("PeaceSign mapping setup: Controller=%s Local=%s Subsystem=%s Context=%s"),
+	// 	*GetName(),
+	// 	IsLocalController() ? TEXT("true") : TEXT("false"),
+	// 	*GetNameSafe(InputSubsystem),
+	// 	*GetNameSafe(GameplayMappingContext));
 
 	if (InputSubsystem && GameplayMappingContext)
 	{
+		const TArray<FEnhancedActionKeyMapping>& Mappings = GameplayMappingContext->GetMappings();
+		if (Mappings.IsEmpty())
+		{
+			UE_LOG(
+				LogTemp,
+				Error,
+				TEXT("Gameplay input context '%s' has no Default Key Mappings."),
+				*GetNameSafe(GameplayMappingContext));
+		}
+
+		for (const FEnhancedActionKeyMapping& Mapping : Mappings)
+		{
+			if (!Mapping.Action || !Mapping.Key.IsValid())
+			{
+				UE_LOG(
+					LogTemp,
+					Warning,
+					TEXT("Gameplay input context '%s' contains an invalid mapping: Action=%s Key=%s"),
+					*GetNameSafe(GameplayMappingContext),
+					*GetNameSafe(Mapping.Action),
+					*Mapping.Key.ToString());
+			}
+		}
+
 		InputSubsystem->AddMappingContext(GameplayMappingContext, 0);
 	}
 }
@@ -92,7 +142,30 @@ void APSPlayerController::BeginPlay()
 void APSPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
-	InputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this, &APSPlayerController::HandlePrimaryAction);
+
+	UEnhancedInputComponent* EnhancedInputComponent = CastChecked<UEnhancedInputComponent>(InputComponent);
+	if (InteractAction)
+	{
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &APSPlayerController::HandlePrimaryAction);
+	}
+	if (InventoryAction)
+	{
+		EnhancedInputComponent->BindAction(InventoryAction, ETriggerEvent::Started, this, &APSPlayerController::HandleInventory);
+	}
+	if (QuestAction)
+	{
+		EnhancedInputComponent->BindAction(QuestAction, ETriggerEvent::Started, this, &APSPlayerController::HandleQuest);
+	}
+	if (AbilityAction)
+	{
+		EnhancedInputComponent->BindAction(AbilityAction, ETriggerEvent::Started, this, &APSPlayerController::HandleAbility);
+	}
+	if (CraftAction)
+	{
+		EnhancedInputComponent->BindAction(CraftAction, ETriggerEvent::Started, this, &APSPlayerController::HandleCraft);
+	}
+
+	// R is a development-only world reset shortcut and is intentionally not part of the gameplay IA set.
 	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &APSPlayerController::HandleResetWorld);
 }
 
@@ -167,6 +240,30 @@ void APSPlayerController::HandlePrimaryAction()
 	}
 }
 
+void APSPlayerController::HandleInventory()
+{
+	UE_LOG(LogTemp, Log, TEXT("Inventory requested"));
+	OnInventoryRequested();
+}
+
+void APSPlayerController::HandleQuest()
+{
+	UE_LOG(LogTemp, Log, TEXT("Quest requested"));
+	OnQuestRequested();
+}
+
+void APSPlayerController::HandleAbility()
+{
+	UE_LOG(LogTemp, Log, TEXT("Ability requested"));
+	OnAbilityRequested();
+}
+
+void APSPlayerController::HandleCraft()
+{
+	UE_LOG(LogTemp, Log, TEXT("Craft requested"));
+	OnCraftRequested();
+}
+
 void APSPlayerController::HandleResetWorld()
 {
 	if (!GridWorld)
@@ -209,6 +306,18 @@ void APSPlayerController::UpdateStatusWidget()
 
 void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+	{
+		if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem =
+			LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
+		{
+			if (GameplayMappingContext)
+			{
+				InputSubsystem->RemoveMappingContext(GameplayMappingContext);
+			}
+		}
+	}
+
 	if (StatusWidget)
 	{
 		StatusWidget->SetStatsComponent(nullptr);

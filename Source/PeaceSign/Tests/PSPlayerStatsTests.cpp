@@ -26,6 +26,11 @@ bool FPSPlayerStatsTest::RunTest(const FString& Parameters)
 	Stats->SetActionActive(true);
 	Stats->TickComponent(1.0f, LEVELTICK_All, nullptr);
 	TestEqual(TEXT("Active action blocks regeneration"), Stats->Stamina, 86.0f);
+	Stats->SetActionActive(false);
+	Stats->SetMovementActive(true);
+	Stats->TickComponent(1.0f, LEVELTICK_All, nullptr);
+	TestEqual(TEXT("Movement blocks regeneration"), Stats->Stamina, 86.0f);
+	Stats->SetMovementActive(false);
 	Stats->ApplyDamage(30.0f);
 	Stats->RestoreHealth(1000.0f);
 	TestEqual(TEXT("Healing caps at maximum"), Stats->Health, 100.0f);

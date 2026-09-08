@@ -30,8 +30,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Stats") bool TryConsumeStamina(float Amount);
 	UFUNCTION(BlueprintCallable, Category="Stats") void SetSurvivalValues(float NewHunger, float NewMentalHealth);
 	UFUNCTION(BlueprintCallable, Category="Stats") void SetActionActive(bool bActive);
+	UFUNCTION(BlueprintCallable, Category="Stats") void SetMovementActive(bool bActive);
 	UFUNCTION(BlueprintCallable, Category="Stats") void ResetStats();
 private:
 	bool bActionActive = false;
+	bool bMovementActive = false;
 	bool bConsumedSinceLastTick = false;
 };
