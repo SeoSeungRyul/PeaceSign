@@ -6,13 +6,11 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "EnhancedInputComponent.h"
-#include "Engine/Engine.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "GameFramework/PlayerController.h"
+#include "InputAction.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
-#include "InputCoreTypes.h"
 #include "PaperFlipbook.h"
 #include "PaperFlipbookComponent.h"
 #include "PaperSprite.h"
@@ -31,7 +29,7 @@ APSPlayerCharacter::APSPlayerCharacter()
 	MovementComponent->bOrientRotationToMovement = false;
 	MovementComponent->bConstrainToPlane = true;
 	MovementComponent->SetPlaneConstraintNormal(FVector::UpVector);
-	MovementComponent->bSnapToPlaneAtStart = true;
+	MovementComponent->bSnapToPlaneAtStart = false;
 	MovementComponent->GravityScale = 0.0f;
 	MovementComponent->DefaultLandMovementMode = MOVE_Flying;
 
@@ -61,17 +59,28 @@ APSPlayerCharacter::APSPlayerCharacter()
 		TEXT("/Game/Art/Male/left.left"));
 	static ConstructorHelpers::FObjectFinder<UTexture2D> RightTextureFinder(
 		TEXT("/Game/Art/Male/right.right"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> MoveActionFinder(
+		TEXT("/Game/Inputs/IA_Move.IA_Move"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> RunActionFinder(
+		TEXT("/Game/Inputs/IA_Run.IA_Run"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> RollActionFinder(
+		TEXT("/Game/Inputs/IA_Roll.IA_Roll"));
 
 	FrontTexture = FrontTextureFinder.Object;
 	BackTexture = BackTextureFinder.Object;
 	LeftTexture = LeftTextureFinder.Object;
 	RightTexture = RightTextureFinder.Object;
+	MoveAction = MoveActionFinder.Object;
+	RunAction = RunActionFinder.Object;
+	RollAction = RollActionFinder.Object;
 }
 
 void APSPlayerCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	GetCharacterMovement()->SetMovementMode(MOVE_Flying);
+	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
+	MovementComponent->SetPlaneConstraintOrigin(GetActorLocation());
+	MovementComponent->SetMovementMode(MOVE_Flying);
 
 	FrontIdle = CreateIdleFlipbook(FrontTexture, TEXT("FrontIdle"));
 	BackIdle = CreateIdleFlipbook(BackTexture, TEXT("BackIdle"));
@@ -89,64 +98,32 @@ void APSPlayerCharacter::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	// 임시 캐릭터는 CharacterMovement의 바닥 판정과 무관하게 XY 평면에서 직접 이동합니다.
-	if (const APlayerController* PlayerController = Cast<APlayerController>(GetController()))
+	FVector2D MovementInput = CurrentMovementInput;
+	if (!MovementInput.IsNearlyZero())
 	{
-		FVector2D MovementInput(
-			(PlayerController->IsInputKeyDown(EKeys::D) ? 1.0f : 0.0f)
-				- (PlayerController->IsInputKeyDown(EKeys::A) ? 1.0f : 0.0f),
-			(PlayerController->IsInputKeyDown(EKeys::W) ? 1.0f : 0.0f)
-				- (PlayerController->IsInputKeyDown(EKeys::S) ? 1.0f : 0.0f));
-		if (!MovementInput.IsNearlyZero())
-		{
-			MovementInput.Normalize();
-			LastMovementInput = MovementInput;
-		}
-
-		const bool bRollKeyDown = PlayerController->IsInputKeyDown(EKeys::LeftControl)
-			|| PlayerController->IsInputKeyDown(EKeys::RightControl);
-		if (bRollKeyDown && !bWasRollKeyDown && !bIsRolling)
-		{
-			StartRoll(MovementInput);
-		}
-		bWasRollKeyDown = bRollKeyDown;
-
-		if (bIsRolling)
-		{
-			TickRoll(DeltaSeconds);
-			bReceivedEnhancedMoveThisFrame = false;
-			return;
-		}
-
-		if (!MovementInput.IsNearlyZero())
-		{
-			SetFacingFromInput(MovementInput);
-
-			const bool bRunKeyDown = PlayerController->IsInputKeyDown(EKeys::LeftShift)
-				|| PlayerController->IsInputKeyDown(EKeys::RightShift);
-			const bool bIsRunning = bRunKeyDown
-				&& StatsComponent->TryConsumeStamina(RunStaminaCostPerSecond * DeltaSeconds);
-			const float CurrentMoveSpeed = bIsRunning ? RunSpeed : TemporaryMoveSpeed;
-			const FVector WorldDelta(MovementInput.Y, MovementInput.X, 0.0f);
-			// The temporary grid world can overlap the pawn capsule at spawn, so normal
-			// movement keeps the original unswept behavior. Rolls still sweep for walls.
-			AddActorWorldOffset(WorldDelta * CurrentMoveSpeed * DeltaSeconds, false);
-
-			if (GEngine)
-			{
-				GEngine->AddOnScreenDebugMessage(
-					2,
-					0.0f,
-					FColor::Cyan,
-					FString::Printf(TEXT("Player XY: %.1f, %.1f  Speed: %.0f"),
-						GetActorLocation().X,
-						GetActorLocation().Y,
-						CurrentMoveSpeed));
-			}
-		}
+		MovementInput.Normalize();
+		LastMovementInput = MovementInput;
 	}
 
-	bReceivedEnhancedMoveThisFrame = false;
+	StatsComponent->SetMovementActive(!MovementInput.IsNearlyZero() || bIsRolling);
+	if (bIsRolling)
+	{
+		TickRoll(DeltaSeconds);
+		return;
+	}
+
+	if (MovementInput.IsNearlyZero())
+	{
+		return;
+	}
+
+	SetFacingFromInput(MovementInput);
+	const bool bIsRunning = bWantsToRun
+		&& StatsComponent->TryConsumeStamina(RunStaminaCostPerSecond * DeltaSeconds);
+	const float CurrentMoveSpeed = bIsRunning ? RunSpeed : TemporaryMoveSpeed;
+	const FVector WorldDelta(MovementInput.Y, MovementInput.X, 0.0f);
+	AddActorWorldOffset(WorldDelta * CurrentMoveSpeed * DeltaSeconds, true);
+
 }
 
 void APSPlayerCharacter::StartRoll(const FVector2D& MovementInput)
@@ -163,8 +140,6 @@ void APSPlayerCharacter::StartRoll(const FVector2D& MovementInput)
 	bIsRolling = true;
 	StatsComponent->SetActionActive(true);
 	SetFacingFromInput(RollInput);
-	CollisionBeforeRoll = GetCapsuleComponent()->GetCollisionEnabled();
-	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 }
 
 void APSPlayerCharacter::TickRoll(const float DeltaSeconds)
@@ -176,14 +151,14 @@ void APSPlayerCharacter::TickRoll(const float DeltaSeconds)
 
 	const float StepTime = FMath::Min(DeltaSeconds, RollTimeRemaining);
 	const float RollSpeed = RollDuration > 0.0f ? RollDistance / RollDuration : 0.0f;
-	AddActorWorldOffset(RollWorldDirection * RollSpeed * StepTime, false);
+	FHitResult Hit;
+	AddActorWorldOffset(RollWorldDirection * RollSpeed * StepTime, true, &Hit);
 	RollTimeRemaining -= StepTime;
 
-	if (RollTimeRemaining <= 0.0f)
+	if (RollTimeRemaining <= 0.0f || Hit.IsValidBlockingHit())
 	{
 		bIsRolling = false;
 		RollTimeRemaining = 0.0f;
-		GetCapsuleComponent()->SetCollisionEnabled(CollisionBeforeRoll);
 		StatsComponent->SetActionActive(false);
 	}
 }
@@ -250,39 +225,65 @@ void APSPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 			ETriggerEvent::Triggered,
 			this,
 			&APSPlayerCharacter::Move);
+		EnhancedInputComponent->BindAction(
+			MoveAction,
+			ETriggerEvent::Completed,
+			this,
+			&APSPlayerCharacter::StopMoving);
+		EnhancedInputComponent->BindAction(
+			MoveAction,
+			ETriggerEvent::Canceled,
+			this,
+			&APSPlayerCharacter::StopMoving);
+	}
+
+	if (RunAction)
+	{
+		EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Started, this, &APSPlayerCharacter::StartRun);
+		EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Completed, this, &APSPlayerCharacter::StopRun);
+		EnhancedInputComponent->BindAction(RunAction, ETriggerEvent::Canceled, this, &APSPlayerCharacter::StopRun);
+	}
+
+	if (RollAction)
+	{
+		EnhancedInputComponent->BindAction(RollAction, ETriggerEvent::Started, this, &APSPlayerCharacter::Roll);
 	}
 }
 
 void APSPlayerCharacter::Move(const FInputActionValue& Value)
 {
 	const FVector2D MovementInput = Value.Get<FVector2D>();
-	bReceivedEnhancedMoveThisFrame = !MovementInput.IsNearlyZero();
-	UE_LOG(
-		LogTemp,
-		Warning,
-		TEXT("PeaceSign move input: X=%.2f Y=%.2f"),
-		MovementInput.X,
-		MovementInput.Y);
-
-	if (GEngine)
-	{
-		GEngine->AddOnScreenDebugMessage(
-			1,
-			0.1f,
-			FColor::Green,
-			FString::Printf(
-				TEXT("Move X=%.2f Y=%.2f"),
-				MovementInput.X,
-				MovementInput.Y));
-	}
-
+	CurrentMovementInput = MovementInput;
 	if (MovementInput.IsNearlyZero())
 	{
 		return;
 	}
 
-	SetFacingFromInput(MovementInput);
+	LastMovementInput = MovementInput.GetSafeNormal();
+	SetFacingFromInput(LastMovementInput);
+}
 
+void APSPlayerCharacter::StopMoving()
+{
+	CurrentMovementInput = FVector2D::ZeroVector;
+}
+
+void APSPlayerCharacter::StartRun()
+{
+	bWantsToRun = true;
+}
+
+void APSPlayerCharacter::StopRun()
+{
+	bWantsToRun = false;
+}
+
+void APSPlayerCharacter::Roll()
+{
+	if (!bIsRolling)
+	{
+		StartRoll(CurrentMovementInput);
+	}
 }
 
 void APSPlayerCharacter::SetFacingFromInput(const FVector2D& MovementInput)
@@ -305,6 +306,7 @@ void APSPlayerCharacter::SetFacingFromInput(const FVector2D& MovementInput)
 
 float APSPlayerCharacter::TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
+	if (bIsRolling) return 0.0f;
 	if (!FMath::IsFinite(DamageAmount) || DamageAmount <= 0.0f) return 0.0f;
 	const float AppliedDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	const float PreviousHealth = StatsComponent->Health;

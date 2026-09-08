@@ -42,26 +42,36 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> MoveAction;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> RunAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> RollAction;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement", meta = (ClampMin = "0.0"))
 	float TemporaryMoveSpeed = 300.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement", meta = (ClampMin = "0.0"))
-	float RunSpeed = 1000.0f;
+	float RunSpeed = 600.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Stamina", meta = (ClampMin = "0.0"))
 	float RunStaminaCostPerSecond = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.01"))
-	float RollDuration = 0.3f;
+	float RollDuration = 1.5f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.0"))
 	float RollDistance = 450.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.0"))
-	float RollStaminaCost = 10.0f;
+	float RollStaminaCost = 30.0f;
 
 private:
 	void Move(const FInputActionValue& Value);
+	void StopMoving();
+	void StartRun();
+	void StopRun();
+	void Roll();
 	void StartRoll(const FVector2D& MovementInput);
 	void TickRoll(float DeltaSeconds);
 	void SetFacingFromInput(const FVector2D& MovementInput);
@@ -103,11 +113,10 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UPaperFlipbook> RightIdle;
 
-	bool bReceivedEnhancedMoveThisFrame = false;
-	bool bWasRollKeyDown = false;
+	bool bWantsToRun = false;
 	bool bIsRolling = false;
 	float RollTimeRemaining = 0.0f;
+	FVector2D CurrentMovementInput = FVector2D::ZeroVector;
 	FVector2D LastMovementInput = FVector2D(0.0f, -1.0f);
 	FVector RollWorldDirection = FVector(-1.0f, 0.0f, 0.0f);
-	ECollisionEnabled::Type CollisionBeforeRoll = ECollisionEnabled::QueryAndPhysics;
 };

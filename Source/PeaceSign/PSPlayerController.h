@@ -7,6 +7,7 @@
 #include "PSPlayerController.generated.h"
 
 class UPSPlayerStatusWidget;
+class UInputAction;
 class UInputMappingContext;
 class APSGridWorld;
 
@@ -15,6 +16,9 @@ UCLASS()
 class PEACESIGN_API APSPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+
+public:
+	APSPlayerController();
 
 protected:
 	virtual void BeginPlay() override;
@@ -27,11 +31,42 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputMappingContext> GameplayMappingContext;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> InteractAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> InventoryAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> QuestAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> AbilityAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> CraftAction;
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Input|Menu")
+	void OnInventoryRequested();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Input|Menu")
+	void OnQuestRequested();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Input|Menu")
+	void OnAbilityRequested();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Input|Menu")
+	void OnCraftRequested();
+
 private:
 	void UpdateStatusWidget();
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
 	TWeakObjectPtr<APawn> StatusPawn;
 	void HandlePrimaryAction();
+	void HandleInventory();
+	void HandleQuest();
+	void HandleAbility();
+	void HandleCraft();
 	void HandleResetWorld();
 
 	UPROPERTY(Transient)

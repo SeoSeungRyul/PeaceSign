@@ -1,7 +1,4 @@
 #include "PSPlayerStatsComponent.h"
-#include "GameFramework/Pawn.h"
-#include "GameFramework/PlayerController.h"
-#include "InputCoreTypes.h"
 
 UPSPlayerStatsComponent::UPSPlayerStatsComponent()
 {
@@ -11,13 +8,7 @@ UPSPlayerStatsComponent::UPSPlayerStatsComponent()
 void UPSPlayerStatsComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	const APawn* Pawn = Cast<APawn>(GetOwner());
-	const APlayerController* Controller = Pawn ? Cast<APlayerController>(Pawn->GetController()) : nullptr;
-	// The current pawn moves by offsets, so velocity alone cannot detect its movement.
-	const bool bMoving = Pawn && (!Pawn->GetVelocity().IsNearlyZero() || (Controller &&
-		(Controller->IsInputKeyDown(EKeys::W) || Controller->IsInputKeyDown(EKeys::A) ||
-		 Controller->IsInputKeyDown(EKeys::S) || Controller->IsInputKeyDown(EKeys::D))));
-	if (Health > 0.0f && !bMoving && !bActionActive && !bConsumedSinceLastTick && FMath::IsFinite(DeltaTime) && DeltaTime > 0.0f)
+	if (Health > 0.0f && !bMovementActive && !bActionActive && !bConsumedSinceLastTick && FMath::IsFinite(DeltaTime) && DeltaTime > 0.0f)
 	{
 		const float NewStamina = FMath::Min(MaxStamina, Stamina + DeltaTime * 10.0f);
 		if (NewStamina != Stamina)
@@ -74,11 +65,16 @@ void UPSPlayerStatsComponent::SetActionActive(bool bActive)
 	bActionActive = bActive;
 }
 
+void UPSPlayerStatsComponent::SetMovementActive(bool bActive)
+{
+	bMovementActive = bActive;
+}
+
 void UPSPlayerStatsComponent::ResetStats()
 {
 	Health = MaxHealth;
 	Stamina = MaxStamina;
 	Hunger = MentalHealth = 100.0f;
-	bActionActive = bConsumedSinceLastTick = false;
+	bActionActive = bMovementActive = bConsumedSinceLastTick = false;
 	OnStatsChanged.Broadcast();
 }
