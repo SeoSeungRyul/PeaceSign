@@ -6,6 +6,7 @@
 #include "Components/TextBlock.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
+#include "Components/SizeBox.h"
 
 void UPSPlayerStatusWidget::NativeOnInitialized()
 {
@@ -19,6 +20,7 @@ void UPSPlayerStatusWidget::NativeOnInitialized()
 	}
 	if (!Bars.Contains(nullptr) && !Labels.Contains(nullptr))
 	{
+		BuildEquipmentPanel();
 		SetVisibility(ESlateVisibility::HitTestInvisible);
 		RefreshStats();
 		return;
@@ -46,8 +48,60 @@ void UPSPlayerStatusWidget::NativeOnInitialized()
 		Rows->AddChildToVerticalBox(Bar)->SetPadding(FMargin(0, 0, 0, 5));
 		Bars.Add(Bar);
 	}
+	BuildEquipmentPanel();
 	SetVisibility(ESlateVisibility::HitTestInvisible);
 	RefreshStats();
+}
+
+void UPSPlayerStatusWidget::BuildEquipmentPanel()
+{
+	UWidget* StatusRoot = WidgetTree->RootWidget;
+	UVerticalBox* Layout = WidgetTree->ConstructWidget<UVerticalBox>();
+	WidgetTree->RootWidget = Layout;
+	USizeBox* StatusSize = WidgetTree->ConstructWidget<USizeBox>();
+	StatusSize->SetHeightOverride(220.0f);
+	StatusSize->SetContent(StatusRoot);
+	Layout->AddChildToVerticalBox(StatusSize);
+	EquipmentPanel = WidgetTree->ConstructWidget<UBorder>();
+	EquipmentPanel->SetPadding(FMargin(14.0f, 10.0f));
+	Layout->AddChildToVerticalBox(EquipmentPanel)->SetPadding(FMargin(0, 10, 0, 0));
+	UVerticalBox* Rows = WidgetTree->ConstructWidget<UVerticalBox>();
+	EquipmentPanel->SetContent(Rows);
+	EquipmentLabel = WidgetTree->ConstructWidget<UTextBlock>();
+	FSlateFontInfo Font = EquipmentLabel->GetFont();
+	Font.Size = 22;
+	Font.TypefaceFontName = FName(TEXT("Bold"));
+	EquipmentLabel->SetFont(Font);
+	Rows->AddChildToVerticalBox(EquipmentLabel);
+	EquipmentHint = WidgetTree->ConstructWidget<UTextBlock>();
+	Font.Size = 12;
+	EquipmentHint->SetFont(Font);
+	EquipmentHint->SetAutoWrapText(true);
+	Rows->AddChildToVerticalBox(EquipmentHint)->SetPadding(FMargin(0, 6, 0, 0));
+	SetEquipment(EPSEquipment::BareHands);
+}
+
+void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment)
+{
+	if (!EquipmentLabel || !EquipmentHint || !EquipmentPanel) return;
+	const bool bHoe = InEquipment == EPSEquipment::Hoe;
+	const bool bSeed = InEquipment == EPSEquipment::Seed;
+	EquipmentLabel->SetText(bHoe
+		? NSLOCTEXT("Equipment", "Hoe", "현재 장비  ·  괭이")
+		: bSeed
+			? NSLOCTEXT("Equipment", "Seed", "현재 장비  ·  씨앗")
+			: NSLOCTEXT("Equipment", "BareHands", "현재 장비  ·  맨손"));
+	EquipmentHint->SetText(bHoe
+		? NSLOCTEXT("Equipment", "HoeHint", "우클릭 · 밭 갈기\n[1] 괭이  [2] 씨앗  [0] 맨손")
+		: bSeed
+			? NSLOCTEXT("Equipment", "SeedHint", "우클릭 · 씨앗 심기\n[1] 괭이  [2] 씨앗  [0] 맨손")
+			: NSLOCTEXT("Equipment", "BareHandsHint", "[1] 괭이  [2] 씨앗  [0] 맨손"));
+	EquipmentLabel->SetColorAndOpacity(FSlateColor(bHoe
+		? FLinearColor(1.0f, 0.8f, 0.25f)
+		: bSeed ? FLinearColor(0.5f, 1.0f, 0.45f) : FLinearColor::White));
+	EquipmentPanel->SetBrushColor(bHoe
+		? FLinearColor(0.12f, 0.19f, 0.07f, 0.96f)
+		: bSeed ? FLinearColor(0.06f, 0.18f, 0.08f, 0.96f) : FLinearColor(0.04f, 0.065f, 0.10f, 0.96f));
 }
 
 void UPSPlayerStatusWidget::SetStatsComponent(UPSPlayerStatsComponent* InStats)

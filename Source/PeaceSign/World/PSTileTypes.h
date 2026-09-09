@@ -11,7 +11,8 @@ enum class EPSTileType : uint8
 	Empty,
 	Grass,
 	Dirt,
-	Stone
+	Stone,
+	TilledSoil
 };
 
 UENUM(BlueprintType)
@@ -20,7 +21,15 @@ enum class EPSTileInteractionResult : uint8
 	InvalidCell,
 	NoEffect,
 	Tilled,
-	Mined
+	Mined,
+	Planted
+};
+
+UENUM(BlueprintType)
+enum class EPSCropType : uint8
+{
+	None,
+	TestCrop
 };
 
 USTRUCT(BlueprintType)
@@ -30,6 +39,9 @@ struct FPSTileCell
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSTileType GroundType = EPSTileType::Grass;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	EPSCropType CropType = EPSCropType::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	uint8 Variant = 0;

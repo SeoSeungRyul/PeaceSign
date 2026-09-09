@@ -28,8 +28,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSTileType GetGroundTile(FIntPoint Cell) const;
 
+	UFUNCTION(BlueprintPure, Category = "Grid World")
+	EPSCropType GetCropType(FIntPoint Cell) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
-	EPSTileInteractionResult InteractWithCell(FIntPoint Cell);
+	EPSTileInteractionResult TillCell(FIntPoint Cell);
+
+	UFUNCTION(BlueprintCallable, Category = "Grid World")
+	EPSTileInteractionResult PlantSeed(FIntPoint Cell);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	bool ResetWorld();
@@ -86,6 +92,7 @@ private:
 	void SpawnChunkRenderer(FIntPoint ChunkCoordinate);
 	void RebuildChunk(FIntPoint ChunkCoordinate);
 	bool SetGroundTile(FIntPoint Cell, EPSTileType GroundType);
+	bool SetCropType(FIntPoint Cell, EPSCropType CropType);
 	bool IsCellInsideWorld(FIntPoint Cell) const;
 	void LoadWorld();
 	void SaveWorld() const;
