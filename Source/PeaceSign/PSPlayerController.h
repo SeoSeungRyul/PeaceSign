@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/PlayerController.h"
+#include "PSEquipmentTypes.h"
 #include "PSPlayerController.generated.h"
 
 class UPSPlayerStatusWidget;
@@ -19,6 +20,8 @@ class PEACESIGN_API APSPlayerController : public APlayerController
 
 public:
 	APSPlayerController();
+	UFUNCTION(BlueprintPure, Category = "Equipment")
+	EPSEquipment GetEquipment() const { return Equipment; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -33,6 +36,15 @@ protected:
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> InteractAction;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
+	TObjectPtr<UInputAction> SpecialAttackAction;
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Input")
+	void OnInteractRequested();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Input")
+	void OnSpecialAttackRequested();
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> InventoryAction;
@@ -59,10 +71,18 @@ protected:
 	void OnCraftRequested();
 
 private:
+	void EquipBareHands();
+	void EquipHoe();
+	void EquipSeed();
+	void SetEquipment(EPSEquipment InEquipment);
+	UPROPERTY(Transient)
+	EPSEquipment Equipment = EPSEquipment::BareHands;
 	void UpdateStatusWidget();
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
 	TWeakObjectPtr<APawn> StatusPawn;
-	void HandlePrimaryAction();
+	void HandleInteract();
+	void HandleSpecialAttack();
+	TOptional<FIntPoint> GetCursorCell() const;
 	void HandleInventory();
 	void HandleQuest();
 	void HandleAbility();

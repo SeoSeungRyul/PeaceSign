@@ -114,24 +114,44 @@ EPSTileType APSGridWorld::GetGroundTile(const FIntPoint Cell) const
 	return GenerateGroundTile(Cell);
 }
 
-EPSTileInteractionResult APSGridWorld::InteractWithCell(const FIntPoint Cell)
+EPSCropType APSGridWorld::GetCropType(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell)) return EPSCropType::None;
+	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].CropType : EPSCropType::None;
+	if (const FPSChunkSaveData* Chunk = ModifiedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].CropType : EPSCropType::None;
+	return EPSCropType::None;
+}
+
+EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 {
 	switch (GetGroundTile(Cell))
 	{
 	case EPSTileType::Grass:
-		return SetGroundTile(Cell, EPSTileType::Dirt)
+	case EPSTileType::Dirt:
+		return SetGroundTile(Cell, EPSTileType::TilledSoil)
 			? EPSTileInteractionResult::Tilled
 			: EPSTileInteractionResult::NoEffect;
 	case EPSTileType::Stone:
-		return SetGroundTile(Cell, EPSTileType::Dirt)
-			? EPSTileInteractionResult::Mined
-			: EPSTileInteractionResult::NoEffect;
-	case EPSTileType::Dirt:
+	case EPSTileType::TilledSoil:
 		return EPSTileInteractionResult::NoEffect;
 	case EPSTileType::Empty:
 	default:
 		return EPSTileInteractionResult::InvalidCell;
 	}
+}
+
+EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell)
+{
+	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
+	if (GetGroundTile(Cell) != EPSTileType::TilledSoil || GetCropType(Cell) != EPSCropType::None)
+		return EPSTileInteractionResult::NoEffect;
+	return SetCropType(Cell, EPSCropType::TestCrop)
+		? EPSTileInteractionResult::Planted
+		: EPSTileInteractionResult::NoEffect;
 }
 
 bool APSGridWorld::ResetWorld()
@@ -381,6 +401,21 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
 
+	RebuildChunk(ChunkCoordinate);
+	SaveWorld();
+	return true;
+}
+
+bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType)
+{
+	if (!IsCellInsideWorld(Cell) || GetCropType(Cell) == CropType) return false;
+	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
+	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
+	Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)].CropType = CropType;
+	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
+	SavedChunk.Coordinate = ChunkCoordinate;
+	SavedChunk.Cells = Chunk.Cells;
 	RebuildChunk(ChunkCoordinate);
 	SaveWorld();
 	return true;

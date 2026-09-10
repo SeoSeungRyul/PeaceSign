@@ -27,6 +27,8 @@ namespace
 			return FColor::Green;
 		case EPSTileType::Dirt:
 			return FColor(150, 75, 20);
+		case EPSTileType::TilledSoil:
+			return FColor(105, 48, 15);
 		case EPSTileType::Stone:
 			return FColor::Silver;
 		case EPSTileType::Empty:
@@ -40,9 +42,11 @@ namespace
 		switch (Result)
 		{
 		case EPSTileInteractionResult::Tilled:
-			return TEXT("Grass tilled into dirt");
+			return TEXT("Soil tilled");
 		case EPSTileInteractionResult::Mined:
 			return TEXT("Stone mined into dirt");
+		case EPSTileInteractionResult::Planted:
+			return TEXT("Seed planted");
 		case EPSTileInteractionResult::NoEffect:
 			return TEXT("This tile has no interaction yet");
 		case EPSTileInteractionResult::InvalidCell:
@@ -58,6 +62,8 @@ APSPlayerController::APSPlayerController()
 		TEXT("/Game/Inputs/IMC_Gameplay.IMC_Gameplay"));
 	static ConstructorHelpers::FObjectFinder<UInputAction> InteractActionFinder(
 		TEXT("/Game/Inputs/IA_Interact.IA_Interact"));
+	static ConstructorHelpers::FObjectFinder<UInputAction> SpecialAttackActionFinder(
+		TEXT("/Game/Inputs/IA_SpecialAttack.IA_SpecialAttack"));
 	static ConstructorHelpers::FObjectFinder<UInputAction> InventoryActionFinder(
 		TEXT("/Game/Inputs/IA_Inventory.IA_Inventory"));
 	static ConstructorHelpers::FObjectFinder<UInputAction> QuestActionFinder(
@@ -69,6 +75,7 @@ APSPlayerController::APSPlayerController()
 
 	GameplayMappingContext = GameplayMappingContextFinder.Object;
 	InteractAction = InteractActionFinder.Object;
+	SpecialAttackAction = SpecialAttackActionFinder.Object;
 	InventoryAction = InventoryActionFinder.Object;
 	QuestAction = QuestActionFinder.Object;
 	AbilityAction = AbilityActionFinder.Object;
@@ -78,6 +85,7 @@ APSPlayerController::APSPlayerController()
 void APSPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
+	SetEquipment(EPSEquipment::BareHands);
 
 	bShowMouseCursor = true;
 	FInputModeGameAndUI InputMode;
@@ -146,7 +154,11 @@ void APSPlayerController::SetupInputComponent()
 	UEnhancedInputComponent* EnhancedInputComponent = CastChecked<UEnhancedInputComponent>(InputComponent);
 	if (InteractAction)
 	{
-		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &APSPlayerController::HandlePrimaryAction);
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &APSPlayerController::HandleInteract);
+	}
+	if (SpecialAttackAction)
+	{
+		EnhancedInputComponent->BindAction(SpecialAttackAction, ETriggerEvent::Started, this, &APSPlayerController::HandleSpecialAttack);
 	}
 	if (InventoryAction)
 	{
@@ -167,34 +179,21 @@ void APSPlayerController::SetupInputComponent()
 
 	// R is a development-only world reset shortcut and is intentionally not part of the gameplay IA set.
 	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &APSPlayerController::HandleResetWorld);
+	InputComponent->BindKey(EKeys::Zero, IE_Pressed, this, &APSPlayerController::EquipBareHands);
+	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &APSPlayerController::EquipHoe);
+	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &APSPlayerController::EquipSeed);
 }
 
 void APSPlayerController::PlayerTick(const float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
 	UpdateStatusWidget();
-	HoveredCell.Reset();
+	HoveredCell = GetCursorCell();
 
-	if (!GridWorld)
+	if (!HoveredCell.IsSet())
 	{
 		return;
 	}
-
-	FVector RayOrigin;
-	FVector RayDirection;
-	if (!DeprojectMousePositionToWorld(RayOrigin, RayDirection) || FMath::IsNearlyZero(RayDirection.Z))
-	{
-		return;
-	}
-
-	const float GridPlaneZ = GridWorld->GetActorLocation().Z;
-	const float IntersectionDistance = (GridPlaneZ - RayOrigin.Z) / RayDirection.Z;
-	if (IntersectionDistance < 0.0f)
-	{
-		return;
-	}
-
-	HoveredCell = GridWorld->WorldToCell(RayOrigin + RayDirection * IntersectionDistance);
 	const FIntPoint Cell = HoveredCell.GetValue();
 	const EPSTileType TileType = GridWorld->GetGroundTile(Cell);
 	const FVector CellCenter = GridWorld->CellToWorldCenter(Cell);
@@ -224,11 +223,45 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 	}
 }
 
-void APSPlayerController::HandlePrimaryAction()
+TOptional<FIntPoint> APSPlayerController::GetCursorCell() const
 {
-	if (GridWorld && HoveredCell.IsSet())
+	if (!GridWorld) return {};
+	FVector RayOrigin, RayDirection;
+	if (!DeprojectMousePositionToWorld(RayOrigin, RayDirection) || FMath::IsNearlyZero(RayDirection.Z)) return {};
+	const float Distance = (GridWorld->GetActorLocation().Z - RayOrigin.Z) / RayDirection.Z;
+	if (Distance < 0.0f) return {};
+	return GridWorld->WorldToCell(RayOrigin + RayDirection * Distance);
+}
+
+void APSPlayerController::HandleInteract()
+{
+	OnInteractRequested();
+}
+
+void APSPlayerController::HandleSpecialAttack()
+{
+	if (Equipment == EPSEquipment::BareHands)
 	{
-		const EPSTileInteractionResult Result = GridWorld->InteractWithCell(HoveredCell.GetValue());
+		OnSpecialAttackRequested();
+		return;
+	}
+	// Resolve the cursor at click time, not from the previous frame's highlight.
+	const TOptional<FIntPoint> TargetCell = GetCursorCell();
+	if (TargetCell.IsSet())
+	{
+		EPSTileInteractionResult Result = EPSTileInteractionResult::NoEffect;
+		switch (Equipment)
+		{
+		case EPSEquipment::Hoe:
+			Result = GridWorld->TillCell(TargetCell.GetValue());
+			break;
+		case EPSEquipment::Seed:
+			Result = GridWorld->PlantSeed(TargetCell.GetValue());
+			break;
+		case EPSEquipment::BareHands:
+		default:
+			return;
+		}
 		if (GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(
@@ -238,6 +271,27 @@ void APSPlayerController::HandlePrimaryAction()
 				GetInteractionResultText(Result));
 		}
 	}
+}
+
+void APSPlayerController::EquipBareHands()
+{
+	SetEquipment(EPSEquipment::BareHands);
+}
+
+void APSPlayerController::EquipHoe()
+{
+	SetEquipment(EPSEquipment::Hoe);
+}
+
+void APSPlayerController::EquipSeed()
+{
+	SetEquipment(EPSEquipment::Seed);
+}
+
+void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
+{
+	Equipment = InEquipment;
+	if (StatusWidget) StatusWidget->SetEquipment(Equipment);
 }
 
 void APSPlayerController::HandleInventory()
@@ -293,7 +347,8 @@ void APSPlayerController::UpdateStatusWidget()
 		if (!StatusWidget) return;
 		StatusWidget->AddToPlayerScreen();
 		StatusWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
-		StatusWidget->SetDesiredSizeInViewport(FVector2D(260.0f, 220.0f));
+		StatusWidget->SetDesiredSizeInViewport(FVector2D(280.0f, 340.0f));
+		StatusWidget->SetEquipment(Equipment);
 		StatusPawn = GetPawn();
 		StatusWidget->SetStatsComponent(GetPawn() ? GetPawn()->FindComponentByClass<UPSPlayerStatsComponent>() : nullptr);
 	}

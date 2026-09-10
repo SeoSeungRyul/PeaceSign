@@ -45,6 +45,7 @@ bool FPSGameplayInputMappingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Run mapping"), HasMapping(Context, TEXT("IA_Run"), EKeys::LeftShift));
 	TestTrue(TEXT("Roll mapping"), HasMapping(Context, TEXT("IA_Roll"), EKeys::SpaceBar));
 	TestTrue(TEXT("Interact mapping"), HasMapping(Context, TEXT("IA_Interact"), EKeys::F));
+	TestTrue(TEXT("Special attack uses right mouse for hoe tilling"), HasMapping(Context, TEXT("IA_SpecialAttack"), EKeys::RightMouseButton));
 	TestTrue(TEXT("Inventory mapping"), HasMapping(Context, TEXT("IA_Inventory"), EKeys::I));
 	TestTrue(TEXT("Quest mapping"), HasMapping(Context, TEXT("IA_Quest"), EKeys::Q));
 	TestTrue(TEXT("Ability mapping"), HasMapping(Context, TEXT("IA_Ability"), EKeys::P));
