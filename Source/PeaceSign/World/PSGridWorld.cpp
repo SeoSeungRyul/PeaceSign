@@ -7,6 +7,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "PSTileChunkActor.h"
 #include "PSWorldSaveGame.h"
+#include "PSCropGrowth.h"
+#include "../Time/PSGameTimeSubsystem.h"
 
 namespace
 {
@@ -47,6 +49,7 @@ void APSGridWorld::BeginPlay()
 #endif
 
 	StartingWorldSeed = WorldSeed;
+	EnsureGrowthUpdates();
 	LoadWorld();
 
 	if (const APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
@@ -55,6 +58,55 @@ void APSGridWorld::BeginPlay()
 		UpdateActiveChunks(PlayerChunk);
 		LastPlayerChunk = PlayerChunk;
 	}
+}
+
+void APSGridWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (GrowthClock) GrowthClock->OnClockChanged.RemoveDynamic(this, &ThisClass::HandleClockChanged);
+	SaveWorld();
+	Super::EndPlay(EndPlayReason);
+}
+
+void APSGridWorld::EnsureGrowthUpdates()
+{
+	if (!GrowthClock && GetWorld()) GrowthClock = GetWorld()->GetSubsystem<UPSGameTimeSubsystem>();
+	if (GrowthClock) GrowthClock->OnClockChanged.AddUniqueDynamic(this, &ThisClass::HandleClockChanged);
+}
+
+int64 APSGridWorld::GetGrowthHalfHour() const
+{
+	const UPSGameTimeSubsystem* Clock = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr;
+	return Clock ? Clock->GetHalfHourIndex() : 12;
+}
+
+void APSGridWorld::HandleClockChanged()
+{
+	if (GrowingCrops.IsEmpty()) return;
+	const int64 Now = GetGrowthHalfHour();
+	TSet<FIntPoint> ChangedChunks;
+	for (auto It = GrowingCrops.CreateIterator(); It; ++It)
+	{
+		const uint8 Stage = PSCropGrowth::GetStage(It.Key(), Now);
+		for (const FIntPoint Cell : It.Value())
+		{
+			const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+			const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+			FPSChunkSaveData* Saved = ModifiedChunks.Find(ChunkCoordinate);
+			if (!Saved || !Saved->Cells.IsValidIndex(Index)) continue;
+			FPSTileCell& Tile = Saved->Cells[Index];
+			if (Tile.CropType == EPSCropType::None || Tile.PlantedHalfHour != It.Key() || Tile.GrowthStage == Stage) continue;
+			Tile.GrowthStage = Stage;
+			if (FPSChunkData* Loaded = LoadedChunks.Find(ChunkCoordinate))
+			{
+				if (Loaded->Cells.IsValidIndex(Index)) Loaded->Cells[Index] = Tile;
+			}
+			ChangedChunks.Add(ChunkCoordinate);
+		}
+		if (Stage == PSCropGrowth::MaxStage) It.RemoveCurrent();
+	}
+	for (const FIntPoint Chunk : ChangedChunks) RebuildChunk(Chunk);
+	// Save once per clock event, including half-hour progress between visible stages.
+	SaveWorld();
 }
 
 void APSGridWorld::Tick(const float DeltaSeconds)
@@ -144,6 +196,18 @@ EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 	}
 }
 
+int32 APSGridWorld::GetCropStage(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell)) return 0;
+	const FIntPoint Chunk = PSGrid::CellToChunk(Cell, ChunkSize);
+	const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+	const TArray<FPSTileCell>* Cells = nullptr;
+	if (const FPSChunkData* Loaded = LoadedChunks.Find(Chunk)) Cells = &Loaded->Cells;
+	else if (const FPSChunkSaveData* Saved = ModifiedChunks.Find(Chunk)) Cells = &Saved->Cells;
+	return Cells && Cells->IsValidIndex(Index) && (*Cells)[Index].CropType != EPSCropType::None
+		? (*Cells)[Index].GrowthStage : 0;
+}
+
 EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell)
 {
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
@@ -174,6 +238,7 @@ bool APSGridWorld::ResetWorld()
 	ActiveChunkActors.Reset();
 	LoadedChunks.Reset();
 	ModifiedChunks.Reset();
+	GrowingCrops.Reset();
 	WorldSeed = StartingWorldSeed;
 	LastPlayerChunk = FIntPoint(MAX_int32, MAX_int32);
 
@@ -409,10 +474,15 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType)
 {
 	if (!IsCellInsideWorld(Cell) || GetCropType(Cell) == CropType) return false;
+	EnsureGrowthUpdates();
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
-	Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)].CropType = CropType;
+	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
+	Tile.CropType = CropType;
+	Tile.GrowthStage = 1;
+	Tile.PlantedHalfHour = GetGrowthHalfHour();
+	if (CropType != EPSCropType::None) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
@@ -441,10 +511,32 @@ void APSGridWorld::LoadWorld()
 	}
 
 	WorldSeed = SaveGame->WorldSeed;
+	const int64 Now = GetGrowthHalfHour();
+	GrowingCrops.Reset();
+	LoadedChunks.Reset();
+	ModifiedChunks.Reset();
 	for (const FPSChunkSaveData& Chunk : SaveGame->ModifiedChunks)
 	{
-		ModifiedChunks.Add(Chunk.Coordinate, Chunk);
+		if (Chunk.Cells.Num() != ChunkSize * ChunkSize) continue;
+		FPSChunkSaveData Restored = Chunk;
+		for (int32 Index = 0; Index < Restored.Cells.Num(); ++Index)
+		{
+			FPSTileCell& Tile = Restored.Cells[Index];
+			if (Tile.CropType == EPSCropType::None) continue;
+			const int64 Age = SaveGame->GrowthClockHalfHour >= 0 && Tile.PlantedHalfHour >= 0
+				? FMath::Clamp<int64>(SaveGame->GrowthClockHalfHour - Tile.PlantedHalfHour, 0, 8) : 0;
+			Tile.PlantedHalfHour = Now - Age;
+			Tile.GrowthStage = PSCropGrowth::GetStage(Tile.PlantedHalfHour, Now);
+			if (Tile.GrowthStage < PSCropGrowth::MaxStage)
+			{
+				const FIntPoint Cell(Chunk.Coordinate.X * ChunkSize + Index % ChunkSize,
+					Chunk.Coordinate.Y * ChunkSize + Index / ChunkSize);
+				GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
+			}
+		}
+		ModifiedChunks.Add(Chunk.Coordinate, MoveTemp(Restored));
 	}
+	EnsureGrowthUpdates();
 }
 
 void APSGridWorld::SaveWorld() const
@@ -457,6 +549,7 @@ void APSGridWorld::SaveWorld() const
 	}
 
 	SaveGame->WorldSeed = WorldSeed;
+	SaveGame->GrowthClockHalfHour = GetGrowthHalfHour();
 	ModifiedChunks.GenerateValueArray(SaveGame->ModifiedChunks);
 	if (!UGameplayStatics::SaveGameToSlot(SaveGame, SaveSlotName, 0))
 	{

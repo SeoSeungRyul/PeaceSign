@@ -3,6 +3,7 @@
 #include "PSPlayerController.h"
 #include "PSPlayerStatsComponent.h"
 #include "UI/PSPlayerStatusWidget.h"
+#include "UI/PSGameTimeWidget.h"
 
 #include "DrawDebugHelpers.h"
 #include "EnhancedInputComponent.h"
@@ -86,6 +87,11 @@ void APSPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 	SetEquipment(EPSEquipment::BareHands);
+	if (IsLocalController())
+	{
+		TimeWidget = CreateWidget<UPSGameTimeWidget>(this, UPSGameTimeWidget::StaticClass());
+		if (TimeWidget) TimeWidget->AddToPlayerScreen();
+	}
 
 	bShowMouseCursor = true;
 	FInputModeGameAndUI InputMode;
@@ -361,6 +367,11 @@ void APSPlayerController::UpdateStatusWidget()
 
 void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (TimeWidget)
+	{
+		TimeWidget->RemoveFromParent();
+		TimeWidget = nullptr;
+	}
 	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
 		if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem =

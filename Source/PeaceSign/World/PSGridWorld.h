@@ -8,6 +8,7 @@
 #include "PSGridWorld.generated.h"
 
 class APSTileChunkActor;
+class UPSGameTimeSubsystem;
 
 UCLASS()
 class PEACESIGN_API APSGridWorld : public AActor
@@ -31,6 +32,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSCropType GetCropType(FIntPoint Cell) const;
 
+	UFUNCTION(BlueprintPure, Category = "Grid World")
+	int32 GetCropStage(FIntPoint Cell) const;
+
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult TillCell(FIntPoint Cell);
 
@@ -51,6 +55,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Grid World")
 	TObjectPtr<USceneComponent> SceneRoot;
@@ -85,6 +90,13 @@ protected:
 #endif
 
 private:
+	friend class FPSCropGrowthTest;
+	void EnsureGrowthUpdates();
+	UFUNCTION() void HandleClockChanged();
+	int64 GetGrowthHalfHour() const;
+	UPROPERTY(Transient) TObjectPtr<UPSGameTimeSubsystem> GrowthClock;
+	// Mature crops are omitted. A timestamp bucket shares one growth calculation.
+	TMap<int64, TArray<FIntPoint>> GrowingCrops;
 	EPSTileType GenerateGroundTile(FIntPoint Cell) const;
 	FPSChunkData GenerateChunk(FIntPoint ChunkCoordinate) const;
 	FPSChunkData& GetOrCreateChunk(FIntPoint ChunkCoordinate);
