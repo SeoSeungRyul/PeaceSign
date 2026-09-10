@@ -16,6 +16,10 @@ public:
 	UPROPERTY(SaveGame)
 	int32 WorldSeed = 1337;
 
+	// Reference for restoring crop ages when a new session's clock starts at 06:00.
+	UPROPERTY(SaveGame)
+	int64 GrowthClockHalfHour = -1;
+
 	UPROPERTY(SaveGame)
 	TArray<FPSChunkSaveData> ModifiedChunks;
 };

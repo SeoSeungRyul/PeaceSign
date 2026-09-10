@@ -7,6 +7,7 @@
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 #include "PSTileTypes.h"
+#include "PSCropGrowth.h"
 
 APSTileChunkActor::APSTileChunkActor()
 {
@@ -122,11 +123,18 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 			}
 			if (Cell.CropType != EPSCropType::None)
 			{
-				const FVector SeedLocation(
+				const FVector SeedCenter(
 					(static_cast<float>(LocalX) + 0.5f) * CellSize,
 					(static_cast<float>(LocalY) + 0.5f) * CellSize,
-					RenderZOffset + 7.0f);
-				SeedTransforms.Emplace(FRotator::ZeroRotator, SeedLocation, FVector(TileScale * 0.10f));
+					RenderZOffset + 5.0f * TileScale);
+				const FVector2D Offsets[] = {FVector2D(0, 0), FVector2D(-0.22f, -0.22f),
+					FVector2D(0.22f, 0.22f), FVector2D(-0.22f, 0.22f), FVector2D(0.22f, -0.22f)};
+				const int32 Stage = FMath::Clamp<int32>(Cell.GrowthStage, 1, PSCropGrowth::MaxStage);
+				for (int32 SeedIndex = 0; SeedIndex < Stage; ++SeedIndex)
+				{
+					const FVector Location = SeedCenter + FVector(Offsets[SeedIndex].X * CellSize, Offsets[SeedIndex].Y * CellSize, 0);
+					SeedTransforms.Emplace(FRotator::ZeroRotator, Location, FVector(TileScale * 0.10f));
+				}
 			}
 		}
 	}

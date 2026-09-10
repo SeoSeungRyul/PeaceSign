@@ -43,6 +43,13 @@ struct FPSTileCell
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSCropType CropType = EPSCropType::None;
 
+	// -1 denotes a legacy crop without a planting timestamp.
+	UPROPERTY(SaveGame)
+	int64 PlantedHalfHour = -1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "1", ClampMax = "5"))
+	uint8 GrowthStage = 1;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	uint8 Variant = 0;
 };

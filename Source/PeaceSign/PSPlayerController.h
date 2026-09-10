@@ -8,6 +8,7 @@
 #include "PSPlayerController.generated.h"
 
 class UPSPlayerStatusWidget;
+class UPSGameTimeWidget;
 class UInputAction;
 class UInputMappingContext;
 class APSGridWorld;
@@ -79,6 +80,7 @@ private:
 	EPSEquipment Equipment = EPSEquipment::BareHands;
 	void UpdateStatusWidget();
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
+	UPROPERTY(Transient) TObjectPtr<UPSGameTimeWidget> TimeWidget;
 	TWeakObjectPtr<APawn> StatusPawn;
 	void HandleInteract();
 	void HandleSpecialAttack();
