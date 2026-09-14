@@ -17,6 +17,7 @@ class PEACESIGN_API UPSPlayerStatusWidget : public UUserWidget
 public:
 	void SetStatsComponent(UPSPlayerStatsComponent* InStats);
 	void SetEquipment(EPSEquipment InEquipment);
+	void SetHarvestedCropCount(int32 Count);
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
@@ -25,6 +26,7 @@ private:
 	void BuildEquipmentPanel();
 	UPROPERTY(Transient) TObjectPtr<UTextBlock> EquipmentLabel;
 	UPROPERTY(Transient) TObjectPtr<UTextBlock> EquipmentHint;
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> HarvestCountLabel;
 	UPROPERTY(Transient) TObjectPtr<UBorder> EquipmentPanel;
 	UFUNCTION() void RefreshStats();
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatsComponent> Stats;

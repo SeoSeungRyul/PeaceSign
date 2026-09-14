@@ -21,5 +21,11 @@ public:
 	int64 GrowthClockHalfHour = -1;
 
 	UPROPERTY(SaveGame)
+	int64 SavedClockHalfHour = -1;
+
+	UPROPERTY(SaveGame)
+	double SavedClockSecondsIntoStep = 0.0;
+
+	UPROPERTY(SaveGame)
 	TArray<FPSChunkSaveData> ModifiedChunks;
 };

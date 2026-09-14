@@ -22,7 +22,9 @@ enum class EPSTileInteractionResult : uint8
 	NoEffect,
 	Tilled,
 	Mined,
-	Planted
+	Planted,
+	Harvested,
+	CropRemoved
 };
 
 UENUM(BlueprintType)

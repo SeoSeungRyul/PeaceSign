@@ -23,6 +23,8 @@ public:
 	APSPlayerController();
 	UFUNCTION(BlueprintPure, Category = "Equipment")
 	EPSEquipment GetEquipment() const { return Equipment; }
+	UFUNCTION(BlueprintPure, Category = "Farming")
+	int32 GetHarvestedCropCount() const { return HarvestedCropCount; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -78,6 +80,8 @@ private:
 	void SetEquipment(EPSEquipment InEquipment);
 	UPROPERTY(Transient)
 	EPSEquipment Equipment = EPSEquipment::BareHands;
+	UPROPERTY(Transient)
+	int32 HarvestedCropCount = 0;
 	void UpdateStatusWidget();
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
 	UPROPERTY(Transient) TObjectPtr<UPSGameTimeWidget> TimeWidget;
@@ -90,6 +94,7 @@ private:
 	void HandleAbility();
 	void HandleCraft();
 	void HandleResetWorld();
+	void HandleAdvanceTime();
 
 	UPROPERTY(Transient)
 	TObjectPtr<APSGridWorld> GridWorld;

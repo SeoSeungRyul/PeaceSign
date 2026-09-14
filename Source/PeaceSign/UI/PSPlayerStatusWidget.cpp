@@ -78,7 +78,13 @@ void UPSPlayerStatusWidget::BuildEquipmentPanel()
 	EquipmentHint->SetFont(Font);
 	EquipmentHint->SetAutoWrapText(true);
 	Rows->AddChildToVerticalBox(EquipmentHint)->SetPadding(FMargin(0, 6, 0, 0));
+	HarvestCountLabel = WidgetTree->ConstructWidget<UTextBlock>();
+	Font.Size = 14;
+	HarvestCountLabel->SetFont(Font);
+	HarvestCountLabel->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.82f, 0.35f)));
+	Rows->AddChildToVerticalBox(HarvestCountLabel)->SetPadding(FMargin(0, 8, 0, 0));
 	SetEquipment(EPSEquipment::BareHands);
+	SetHarvestedCropCount(0);
 }
 
 void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment)
@@ -92,16 +98,24 @@ void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment)
 			? NSLOCTEXT("Equipment", "Seed", "현재 장비  ·  씨앗")
 			: NSLOCTEXT("Equipment", "BareHands", "현재 장비  ·  맨손"));
 	EquipmentHint->SetText(bHoe
-		? NSLOCTEXT("Equipment", "HoeHint", "우클릭 · 밭 갈기\n[1] 괭이  [2] 씨앗  [0] 맨손")
+		? NSLOCTEXT("Equipment", "HoeHint", "우클릭 · 밭 갈기 / 다 자란 작물 수확\n[1] 괭이  [2] 씨앗  [0] 맨손")
 		: bSeed
 			? NSLOCTEXT("Equipment", "SeedHint", "우클릭 · 씨앗 심기\n[1] 괭이  [2] 씨앗  [0] 맨손")
-			: NSLOCTEXT("Equipment", "BareHandsHint", "[1] 괭이  [2] 씨앗  [0] 맨손"));
+			: NSLOCTEXT("Equipment", "BareHandsHint", "우클릭 · 작물 제거\n[1] 괭이  [2] 씨앗  [0] 맨손"));
 	EquipmentLabel->SetColorAndOpacity(FSlateColor(bHoe
 		? FLinearColor(1.0f, 0.8f, 0.25f)
 		: bSeed ? FLinearColor(0.5f, 1.0f, 0.45f) : FLinearColor::White));
 	EquipmentPanel->SetBrushColor(bHoe
 		? FLinearColor(0.12f, 0.19f, 0.07f, 0.96f)
 		: bSeed ? FLinearColor(0.06f, 0.18f, 0.08f, 0.96f) : FLinearColor(0.04f, 0.065f, 0.10f, 0.96f));
+}
+
+void UPSPlayerStatusWidget::SetHarvestedCropCount(const int32 Count)
+{
+	if (!HarvestCountLabel) return;
+	HarvestCountLabel->SetText(FText::Format(
+		NSLOCTEXT("Equipment", "HarvestedCropCount", "수확한 작물  ·  {0}"),
+		FText::AsNumber(FMath::Max(0, Count))));
 }
 
 void UPSPlayerStatusWidget::SetStatsComponent(UPSPlayerStatsComponent* InStats)

@@ -46,6 +46,9 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Seed can be planted on farmland"), Grid->PlantSeed(TilledCells[0]), EPSTileInteractionResult::Planted);
 		TestEqual(TEXT("Planted seed is stored separately from ground"), Grid->GetCropType(TilledCells[0]), EPSCropType::TestCrop);
 		TestEqual(TEXT("A tile cannot be planted twice"), Grid->PlantSeed(TilledCells[0]), EPSTileInteractionResult::NoEffect);
+		TestEqual(TEXT("Bare hands remove a crop"), Grid->RemoveCrop(TilledCells[0]), EPSTileInteractionResult::CropRemoved);
+		TestEqual(TEXT("Removed crop leaves tilled soil empty"), Grid->GetCropType(TilledCells[0]), EPSCropType::None);
+		TestEqual(TEXT("Removed crop can be replanted"), Grid->PlantSeed(TilledCells[0]), EPSTileInteractionResult::Planted);
 	}
 	if (Stone)
 	{
@@ -66,6 +69,7 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 			}
 		TestEqual(TEXT("Both tilled tiles survive serialization"), TilledCount, 2);
 		TestEqual(TEXT("Planted seed survives serialization"), CropCount, 1);
+		TestTrue(TEXT("Current game time is saved"), Saved->SavedClockHalfHour >= 0);
 	}
 	APSTileChunkActor* Renderer = World->SpawnActor<APSTileChunkActor>();
 	FPSChunkData Chunk;
