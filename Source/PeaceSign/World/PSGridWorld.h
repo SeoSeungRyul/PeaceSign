@@ -42,6 +42,12 @@ public:
 	EPSTileInteractionResult PlantSeed(FIntPoint Cell);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
+	EPSTileInteractionResult HarvestCrop(FIntPoint Cell);
+
+	UFUNCTION(BlueprintCallable, Category = "Grid World")
+	EPSTileInteractionResult RemoveCrop(FIntPoint Cell);
+
+	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	bool ResetWorld();
 
 	UFUNCTION(CallInEditor, Category = "Grid World|Editor Preview", meta = (DisplayName = "Generate Grid Preview"))

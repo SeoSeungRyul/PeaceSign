@@ -21,7 +21,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Game Time")
 	int64 GetDay() const { return Clock.Day; }
 	UFUNCTION(BlueprintPure, Category = "Game Time")
-	int64 GetHalfHourIndex() const { return (Clock.Day - 1) * FPSGameClockState::StepsPerDay + Clock.Step; }
+	int64 GetHalfHourIndex() const { return Clock.GetHalfHourIndex(); }
+	double GetSecondsIntoStep() const { return Clock.RemainingSeconds; }
+	void RestoreClock(int64 HalfHourIndex, double SecondsIntoStep);
+	UFUNCTION(BlueprintCallable, Category = "Game Time")
+	void AdvanceGameHours(int32 Hours);
 	UPROPERTY(BlueprintAssignable, Category = "Game Time")
 	FPSClockChanged OnClockChanged;
 

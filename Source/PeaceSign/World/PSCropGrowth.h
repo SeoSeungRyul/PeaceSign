@@ -5,7 +5,8 @@
 namespace PSCropGrowth
 {
 	constexpr int32 MaxStage = 5;
-	constexpr int64 HalfHoursPerStage = 2;
+	constexpr int64 HalfHoursPerStage = 48;
+	constexpr int64 MaxElapsedHalfHours = (MaxStage - 1) * HalfHoursPerStage;
 	inline uint8 GetStage(int64 PlantedHalfHour, int64 CurrentHalfHour)
 	{
 		const int64 Elapsed = FMath::Max<int64>(0, CurrentHalfHour - PlantedHalfHour);

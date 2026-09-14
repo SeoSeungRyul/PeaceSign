@@ -81,7 +81,11 @@ int64 APSGridWorld::GetGrowthHalfHour() const
 
 void APSGridWorld::HandleClockChanged()
 {
-	if (GrowingCrops.IsEmpty()) return;
+	if (GrowingCrops.IsEmpty())
+	{
+		SaveWorld();
+		return;
+	}
 	const int64 Now = GetGrowthHalfHour();
 	TSet<FIntPoint> ChangedChunks;
 	for (auto It = GrowingCrops.CreateIterator(); It; ++It)
@@ -215,6 +219,25 @@ EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell)
 		return EPSTileInteractionResult::NoEffect;
 	return SetCropType(Cell, EPSCropType::TestCrop)
 		? EPSTileInteractionResult::Planted
+		: EPSTileInteractionResult::NoEffect;
+}
+
+EPSTileInteractionResult APSGridWorld::HarvestCrop(const FIntPoint Cell)
+{
+	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
+	if (GetCropType(Cell) == EPSCropType::None || GetCropStage(Cell) < PSCropGrowth::MaxStage)
+		return EPSTileInteractionResult::NoEffect;
+	return SetCropType(Cell, EPSCropType::None)
+		? EPSTileInteractionResult::Harvested
+		: EPSTileInteractionResult::NoEffect;
+}
+
+EPSTileInteractionResult APSGridWorld::RemoveCrop(const FIntPoint Cell)
+{
+	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
+	if (GetCropType(Cell) == EPSCropType::None) return EPSTileInteractionResult::NoEffect;
+	return SetCropType(Cell, EPSCropType::None)
+		? EPSTileInteractionResult::CropRemoved
 		: EPSTileInteractionResult::NoEffect;
 }
 
@@ -479,10 +502,18 @@ bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType)
 	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
+	if (Tile.PlantedHalfHour >= 0)
+	{
+		if (TArray<FIntPoint>* Bucket = GrowingCrops.Find(Tile.PlantedHalfHour))
+		{
+			Bucket->RemoveSingleSwap(Cell);
+			if (Bucket->IsEmpty()) GrowingCrops.Remove(Tile.PlantedHalfHour);
+		}
+	}
 	Tile.CropType = CropType;
 	Tile.GrowthStage = 1;
-	Tile.PlantedHalfHour = GetGrowthHalfHour();
-	if (CropType != EPSCropType::None) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
+	Tile.PlantedHalfHour = CropType == EPSCropType::None ? -1 : GetGrowthHalfHour();
+	if (CropType != EPSCropType::None) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).AddUnique(Cell);
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
@@ -499,6 +530,7 @@ bool APSGridWorld::IsCellInsideWorld(const FIntPoint Cell) const
 
 void APSGridWorld::LoadWorld()
 {
+	EnsureGrowthUpdates();
 	if (!UGameplayStatics::DoesSaveGameExist(SaveSlotName, 0))
 	{
 		return;
@@ -511,6 +543,11 @@ void APSGridWorld::LoadWorld()
 	}
 
 	WorldSeed = SaveGame->WorldSeed;
+	if (SaveGame->SavedClockHalfHour >= 0 && GrowthClock)
+	{
+		GrowthClock->OnClockChanged.RemoveDynamic(this, &ThisClass::HandleClockChanged);
+		GrowthClock->RestoreClock(SaveGame->SavedClockHalfHour, SaveGame->SavedClockSecondsIntoStep);
+	}
 	const int64 Now = GetGrowthHalfHour();
 	GrowingCrops.Reset();
 	LoadedChunks.Reset();
@@ -523,8 +560,12 @@ void APSGridWorld::LoadWorld()
 		{
 			FPSTileCell& Tile = Restored.Cells[Index];
 			if (Tile.CropType == EPSCropType::None) continue;
-			const int64 Age = SaveGame->GrowthClockHalfHour >= 0 && Tile.PlantedHalfHour >= 0
-				? FMath::Clamp<int64>(SaveGame->GrowthClockHalfHour - Tile.PlantedHalfHour, 0, 8) : 0;
+			const int64 SavedStageAge = (FMath::Clamp<int32>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage) - 1)
+				* PSCropGrowth::HalfHoursPerStage;
+			const int64 TimestampAge = SaveGame->GrowthClockHalfHour >= 0 && Tile.PlantedHalfHour >= 0
+				? FMath::Clamp<int64>(SaveGame->GrowthClockHalfHour - Tile.PlantedHalfHour, 0, PSCropGrowth::MaxElapsedHalfHours) : 0;
+			// Preserve stages saved under an older growth interval instead of moving crops backwards.
+			const int64 Age = FMath::Max(SavedStageAge, TimestampAge);
 			Tile.PlantedHalfHour = Now - Age;
 			Tile.GrowthStage = PSCropGrowth::GetStage(Tile.PlantedHalfHour, Now);
 			if (Tile.GrowthStage < PSCropGrowth::MaxStage)
@@ -550,6 +591,11 @@ void APSGridWorld::SaveWorld() const
 
 	SaveGame->WorldSeed = WorldSeed;
 	SaveGame->GrowthClockHalfHour = GetGrowthHalfHour();
+	if (const UPSGameTimeSubsystem* Clock = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr)
+	{
+		SaveGame->SavedClockHalfHour = Clock->GetHalfHourIndex();
+		SaveGame->SavedClockSecondsIntoStep = Clock->GetSecondsIntoStep();
+	}
 	ModifiedChunks.GenerateValueArray(SaveGame->ModifiedChunks);
 	if (!UGameplayStatics::SaveGameToSlot(SaveGame, SaveSlotName, 0))
 	{

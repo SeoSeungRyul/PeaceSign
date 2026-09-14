@@ -4,6 +4,7 @@
 #include "PSPlayerStatsComponent.h"
 #include "UI/PSPlayerStatusWidget.h"
 #include "UI/PSGameTimeWidget.h"
+#include "Time/PSGameTimeSubsystem.h"
 
 #include "DrawDebugHelpers.h"
 #include "EnhancedInputComponent.h"
@@ -48,6 +49,10 @@ namespace
 			return TEXT("Stone mined into dirt");
 		case EPSTileInteractionResult::Planted:
 			return TEXT("Seed planted");
+		case EPSTileInteractionResult::Harvested:
+			return TEXT("Crop harvested");
+		case EPSTileInteractionResult::CropRemoved:
+			return TEXT("Crop removed");
 		case EPSTileInteractionResult::NoEffect:
 			return TEXT("This tile has no interaction yet");
 		case EPSTileInteractionResult::InvalidCell:
@@ -188,6 +193,7 @@ void APSPlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Zero, IE_Pressed, this, &APSPlayerController::EquipBareHands);
 	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &APSPlayerController::EquipHoe);
 	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &APSPlayerController::EquipSeed);
+	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &APSPlayerController::HandleAdvanceTime);
 }
 
 void APSPlayerController::PlayerTick(const float DeltaTime)
@@ -246,20 +252,36 @@ void APSPlayerController::HandleInteract()
 
 void APSPlayerController::HandleSpecialAttack()
 {
+	// Resolve the cursor at click time, not from the previous frame's highlight.
+	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (Equipment == EPSEquipment::BareHands)
 	{
+		if (TargetCell.IsSet())
+		{
+			const EPSTileInteractionResult Result = GridWorld->RemoveCrop(TargetCell.GetValue());
+			if (Result == EPSTileInteractionResult::CropRemoved)
+			{
+				if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Yellow, GetInteractionResultText(Result));
+				return;
+			}
+		}
 		OnSpecialAttackRequested();
 		return;
 	}
-	// Resolve the cursor at click time, not from the previous frame's highlight.
-	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (TargetCell.IsSet())
 	{
 		EPSTileInteractionResult Result = EPSTileInteractionResult::NoEffect;
 		switch (Equipment)
 		{
 		case EPSEquipment::Hoe:
-			Result = GridWorld->TillCell(TargetCell.GetValue());
+			Result = GridWorld->HarvestCrop(TargetCell.GetValue());
+			if (Result == EPSTileInteractionResult::NoEffect)
+				Result = GridWorld->TillCell(TargetCell.GetValue());
+			if (Result == EPSTileInteractionResult::Harvested)
+			{
+				++HarvestedCropCount;
+				if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
+			}
 			break;
 		case EPSEquipment::Seed:
 			Result = GridWorld->PlantSeed(TargetCell.GetValue());
@@ -332,6 +354,11 @@ void APSPlayerController::HandleResetWorld()
 	}
 
 	const bool bResetSucceeded = GridWorld->ResetWorld();
+	if (bResetSucceeded)
+	{
+		HarvestedCropCount = 0;
+		if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
+	}
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(
@@ -339,6 +366,15 @@ void APSPlayerController::HandleResetWorld()
 			3.0f,
 			bResetSucceeded ? FColor::Green : FColor::Red,
 			bResetSucceeded ? TEXT("World reset complete") : TEXT("World reset failed"));
+	}
+}
+
+void APSPlayerController::HandleAdvanceTime()
+{
+	if (UPSGameTimeSubsystem* GameTime = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr)
+	{
+		GameTime->AdvanceGameHours(6);
+		if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Cyan, TEXT("Game time advanced by 6 hours"));
 	}
 }
 
@@ -355,6 +391,7 @@ void APSPlayerController::UpdateStatusWidget()
 		StatusWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
 		StatusWidget->SetDesiredSizeInViewport(FVector2D(280.0f, 340.0f));
 		StatusWidget->SetEquipment(Equipment);
+		StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
 		StatusPawn = GetPawn();
 		StatusWidget->SetStatsComponent(GetPawn() ? GetPawn()->FindComponentByClass<UPSPlayerStatsComponent>() : nullptr);
 	}
