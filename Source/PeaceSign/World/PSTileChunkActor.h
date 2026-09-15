@@ -37,6 +37,9 @@ protected:
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> StoneInstances;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> WaterInstances;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> TilledSoilInstances;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")

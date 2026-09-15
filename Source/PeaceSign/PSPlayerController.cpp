@@ -33,6 +33,8 @@ namespace
 			return FColor(105, 48, 15);
 		case EPSTileType::Stone:
 			return FColor::Silver;
+		case EPSTileType::Water:
+			return FColor::Cyan;
 		case EPSTileType::Empty:
 		default:
 			return FColor::Red;
@@ -193,12 +195,14 @@ void APSPlayerController::SetupInputComponent()
 	InputComponent->BindKey(EKeys::Zero, IE_Pressed, this, &APSPlayerController::EquipBareHands);
 	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &APSPlayerController::EquipHoe);
 	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &APSPlayerController::EquipSeed);
+	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &APSPlayerController::EquipFishingRod);
 	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &APSPlayerController::HandleAdvanceTime);
 }
 
 void APSPlayerController::PlayerTick(const float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
+	UpdateFishing();
 	UpdateStatusWidget();
 	HoveredCell = GetCursorCell();
 
@@ -214,7 +218,10 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 		GetWorld(),
 		CellCenter,
 		FVector(HalfCell, HalfCell, 1.0f),
-		GetTileDebugColor(TileType),
+		Equipment == EPSEquipment::FishingRod
+			? (GetPawn() && GridWorld->CanFishFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), Cell)
+				? FColor::Green : FColor::Red)
+			: GetTileDebugColor(TileType),
 		false,
 		0.0f,
 		0,
@@ -247,11 +254,21 @@ TOptional<FIntPoint> APSPlayerController::GetCursorCell() const
 
 void APSPlayerController::HandleInteract()
 {
+	if (Equipment == EPSEquipment::FishingRod)
+	{
+		HandleFishingRod();
+		return;
+	}
 	OnInteractRequested();
 }
 
 void APSPlayerController::HandleSpecialAttack()
 {
+	if (Equipment == EPSEquipment::FishingRod)
+	{
+		HandleFishingRod();
+		return;
+	}
 	// Resolve the cursor at click time, not from the previous frame's highlight.
 	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (Equipment == EPSEquipment::BareHands)
@@ -316,8 +333,68 @@ void APSPlayerController::EquipSeed()
 	SetEquipment(EPSEquipment::Seed);
 }
 
+void APSPlayerController::EquipFishingRod()
+{
+	SetEquipment(EPSEquipment::FishingRod);
+}
+
+void APSPlayerController::HandleFishingRod()
+{
+	// A second click does not restart or move an active cast.
+	if (IsFishing()) return;
+	const TOptional<FIntPoint> Target = GetCursorCell();
+	if (!Target.IsSet() || !TryUseFishingRod(Target.GetValue()))
+	{
+		if (GEngine) GEngine->AddOnScreenDebugMessage(4, 2.0f, FColor::Yellow,
+			TEXT("Stand still on land and select water within 2 cells straight or 1 cell diagonally."));
+	}
+}
+
+bool APSPlayerController::TryUseFishingRod(const FIntPoint WaterCell)
+{
+	UpdateFishing();
+	if (IsFishing()) return false;
+	const APawn* PlayerPawn = GetPawn();
+	if (Equipment != EPSEquipment::FishingRod || !IsValid(GridWorld) || !PlayerPawn
+		|| !PlayerPawn->GetVelocity().IsNearlyZero()
+		|| !GridWorld->CanFishFrom(GridWorld->WorldToCell(PlayerPawn->GetActorLocation()), WaterCell)) return false;
+	FishingCell = WaterCell;
+	FishingPawn = GetPawn();
+	FishingStartLocation = PlayerPawn->GetActorLocation();
+	if (GEngine) GEngine->AddOnScreenDebugMessage(4, 2.0f, FColor::Cyan, TEXT("Fishing rod cast"));
+	OnFishingRodUsed(WaterCell);
+	return true;
+}
+
+void APSPlayerController::UpdateFishing()
+{
+	if (!IsFishing()) return;
+	const APawn* PlayerPawn = GetPawn();
+	if (!PlayerPawn || FishingPawn.Get() != PlayerPawn || !IsValid(GridWorld)
+		|| Equipment != EPSEquipment::FishingRod
+		|| !PlayerPawn->GetActorLocation().Equals(FishingStartLocation, 0.01f)
+		|| !PlayerPawn->GetVelocity().IsNearlyZero()
+		|| !GridWorld->CanFishFrom(GridWorld->WorldToCell(PlayerPawn->GetActorLocation()), FishingCell.GetValue()))
+	{
+		StopFishing();
+		return;
+	}
+	const FVector Target = GridWorld->CellToWorldCenter(FishingCell.GetValue()) + FVector(0, 0, 8);
+	// Draw for this frame only: stopping clears the visual without flushing other debug shapes.
+	DrawDebugLine(GetWorld(), PlayerPawn->GetActorLocation() + FVector(0, 0, 12), Target,
+		FColor::White, false, 0.0f, 0, 2.0f);
+	DrawDebugSphere(GetWorld(), Target, 8.0f, 12, FColor::Red, false, 0.0f);
+}
+
+void APSPlayerController::StopFishing()
+{
+	FishingCell.Reset();
+	FishingPawn.Reset();
+}
+
 void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
 {
+	if (Equipment != InEquipment) StopFishing();
 	Equipment = InEquipment;
 	if (StatusWidget) StatusWidget->SetEquipment(Equipment);
 }
@@ -356,6 +433,7 @@ void APSPlayerController::HandleResetWorld()
 	const bool bResetSucceeded = GridWorld->ResetWorld();
 	if (bResetSucceeded)
 	{
+		StopFishing();
 		HarvestedCropCount = 0;
 		if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
 	}
@@ -404,6 +482,7 @@ void APSPlayerController::UpdateStatusWidget()
 
 void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	StopFishing();
 	if (TimeWidget)
 	{
 		TimeWidget->RemoveFromParent();

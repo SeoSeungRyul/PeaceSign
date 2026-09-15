@@ -182,6 +182,17 @@ EPSCropType APSGridWorld::GetCropType(const FIntPoint Cell) const
 	return EPSCropType::None;
 }
 
+bool APSGridWorld::CanFishFrom(const FIntPoint PlayerCell, const FIntPoint WaterCell) const
+{
+	if (!IsCellInsideWorld(PlayerCell) || !IsCellInsideWorld(WaterCell)) return false;
+	const EPSTileType Ground = GetGroundTile(PlayerCell);
+	const int32 DX = FMath::Abs(PlayerCell.X - WaterCell.X);
+	const int32 DY = FMath::Abs(PlayerCell.Y - WaterCell.Y);
+	return Ground != EPSTileType::Empty && Ground != EPSTileType::Water
+		&& DX + DY >= 1 && DX + DY <= 2
+		&& GetGroundTile(WaterCell) == EPSTileType::Water;
+}
+
 EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 {
 	switch (GetGroundTile(Cell))
@@ -192,6 +203,7 @@ EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 			? EPSTileInteractionResult::Tilled
 			: EPSTileInteractionResult::NoEffect;
 	case EPSTileType::Stone:
+	case EPSTileType::Water:
 	case EPSTileType::TilledSoil:
 		return EPSTileInteractionResult::NoEffect;
 	case EPSTileType::Empty:
@@ -353,6 +365,38 @@ void APSGridWorld::ClearEditorPreview()
 #endif
 }
 
+bool APSGridWorld::IsLakeCell(const FIntPoint Cell) const
+{
+	// One rectangular lake per selected 8x8 region, with a dry border between lakes.
+	// Floor division keeps the same layout on both sides of the world origin.
+	constexpr int32 RegionSize = 8;
+	const FIntPoint Region = PSGrid::CellToChunk(Cell, RegionSize);
+	const uint32 Hash = HashCell(Region, WorldSeed);
+	if (Hash % 100 >= 35) return false;
+	const FIntPoint Size(2 + (Hash >> 8) % 3, 2 + (Hash >> 12) % 3);
+	const FIntPoint Min = Region * RegionSize + FIntPoint(2, 2);
+	const FIntPoint Max = Min + Size - FIntPoint(1, 1);
+	if (Cell.X < Min.X || Cell.Y < Min.Y || Cell.X > Max.X || Cell.Y > Max.Y) return false;
+	// Reject entire lakes at world edges and near the starting area; never clip to one tile.
+	if (!IsCellInsideWorld(Min) || !IsCellInsideWorld(Max)
+		|| (Min.X <= 2 && Max.X >= -2 && Min.Y <= 2 && Max.Y >= -2)) return false;
+	// Old saves contain whole chunks, including untouched land. Suppress a whole lake
+	// if it overlaps saved land so loading an old chunk cannot cut a lake into fragments.
+	for (int32 Y = Min.Y; Y <= Max.Y; ++Y)
+	{
+		for (int32 X = Min.X; X <= Max.X; ++X)
+		{
+			const FIntPoint LakeCell(X, Y);
+			if (const FPSChunkSaveData* Saved = ModifiedChunks.Find(PSGrid::CellToChunk(LakeCell, ChunkSize)))
+			{
+				const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(LakeCell, ChunkSize), ChunkSize);
+				if (Saved->Cells.IsValidIndex(Index) && Saved->Cells[Index].GroundType != EPSTileType::Water) return false;
+			}
+		}
+	}
+	return true;
+}
+
 EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 {
 	if (!IsCellInsideWorld(Cell))
@@ -360,6 +404,7 @@ EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 		return EPSTileType::Empty;
 	}
 
+	if (IsLakeCell(Cell)) return EPSTileType::Water;
 	const uint32 Roll = HashCell(Cell, WorldSeed) % 100;
 	return Roll < 5 ? EPSTileType::Stone : Roll < 15 ? EPSTileType::Dirt : EPSTileType::Grass;
 }

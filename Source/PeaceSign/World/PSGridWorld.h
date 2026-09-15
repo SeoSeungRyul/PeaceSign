@@ -29,6 +29,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSTileType GetGroundTile(FIntPoint Cell) const;
 
+	// Cast from land up to two cells in a straight line or one cell diagonally.
+	UFUNCTION(BlueprintPure, Category = "Fishing")
+	bool CanFishFrom(FIntPoint PlayerCell, FIntPoint WaterCell) const;
+
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSCropType GetCropType(FIntPoint Cell) const;
 
@@ -97,6 +101,8 @@ protected:
 
 private:
 	friend class FPSCropGrowthTest;
+	friend class FPSFishingTest;
+	bool IsLakeCell(FIntPoint Cell) const;
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();
 	int64 GetGrowthHalfHour() const;

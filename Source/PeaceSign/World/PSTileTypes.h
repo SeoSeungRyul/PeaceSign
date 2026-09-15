@@ -12,7 +12,8 @@ enum class EPSTileType : uint8
 	Grass,
 	Dirt,
 	Stone,
-	TilledSoil
+	TilledSoil,
+	Water
 };
 
 UENUM(BlueprintType)

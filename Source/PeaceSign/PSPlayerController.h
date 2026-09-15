@@ -26,6 +26,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Farming")
 	int32 GetHarvestedCropCount() const { return HarvestedCropCount; }
 
+	UFUNCTION(BlueprintCallable, Category = "Fishing")
+	bool TryUseFishingRod(FIntPoint WaterCell);
+
+	UFUNCTION(BlueprintPure, Category = "Fishing")
+	bool IsFishing() const { return FishingCell.IsSet(); }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -48,6 +54,9 @@ protected:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Input")
 	void OnSpecialAttackRequested();
+
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing")
+	void OnFishingRodUsed(FIntPoint WaterCell);
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
 	TObjectPtr<UInputAction> InventoryAction;
@@ -74,6 +83,14 @@ protected:
 	void OnCraftRequested();
 
 private:
+	friend class FPSFishingTest;
+	void EquipFishingRod();
+	void HandleFishingRod();
+	void UpdateFishing();
+	void StopFishing();
+	TOptional<FIntPoint> FishingCell;
+	TWeakObjectPtr<APawn> FishingPawn;
+	FVector FishingStartLocation = FVector::ZeroVector;
 	void EquipBareHands();
 	void EquipHoe();
 	void EquipSeed();

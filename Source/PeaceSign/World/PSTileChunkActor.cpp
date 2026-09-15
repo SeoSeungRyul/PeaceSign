@@ -27,6 +27,8 @@ APSTileChunkActor::APSTileChunkActor()
 
 	StoneInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("StoneInstances"));
 	StoneInstances->SetupAttachment(SceneRoot);
+	WaterInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("WaterInstances"));
+	WaterInstances->SetupAttachment(SceneRoot);
 	SeedInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("SeedInstances"));
 	SeedInstances->SetupAttachment(SceneRoot);
 
@@ -53,6 +55,7 @@ APSTileChunkActor::APSTileChunkActor()
 	ConfigureInstances(GrassInstances);
 	ConfigureInstances(DirtInstances);
 	ConfigureInstances(StoneInstances);
+	ConfigureInstances(WaterInstances);
 	ConfigureInstances(TilledSoilInstances);
 	ConfigureInstances(SeedInstances);
 	SeedInstances->SetStaticMesh(SeedMesh);
@@ -69,6 +72,7 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	GrassInstances->ClearInstances();
 	DirtInstances->ClearInstances();
 	StoneInstances->ClearInstances();
+	WaterInstances->ClearInstances();
 	TilledSoilInstances->ClearInstances();
 	SeedInstances->ClearInstances();
 
@@ -81,6 +85,7 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	TArray<FTransform> GrassTransforms;
 	TArray<FTransform> DirtTransforms;
 	TArray<FTransform> StoneTransforms;
+	TArray<FTransform> WaterTransforms;
 	TArray<FTransform> TilledSoilTransforms;
 	TArray<FTransform> SeedTransforms;
 	GrassTransforms.Reserve(ChunkData.Cells.Num());
@@ -108,6 +113,9 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 				break;
 			case EPSTileType::Stone:
 				TargetTransforms = &StoneTransforms;
+				break;
+			case EPSTileType::Water:
+				TargetTransforms = &WaterTransforms;
 				break;
 			default:
 				break;
@@ -142,6 +150,7 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	GrassInstances->AddInstances(GrassTransforms, false, false, false);
 	DirtInstances->AddInstances(DirtTransforms, false, false, false);
 	StoneInstances->AddInstances(StoneTransforms, false, false, false);
+	WaterInstances->AddInstances(WaterTransforms, false, false, false);
 	TilledSoilInstances->AddInstances(TilledSoilTransforms, false, false, false);
 	SeedInstances->AddInstances(SeedTransforms, false, false, false);
 }
@@ -178,5 +187,6 @@ void APSTileChunkActor::ApplyMaterials()
 	ApplyMaterial(DirtInstances, TileMesh, DirtMaterial, FLinearColor(0.38f, 0.16f, 0.05f));
 	ApplyMaterial(TilledSoilInstances, TileMesh, DirtMaterial, FLinearColor(0.25f, 0.10f, 0.03f));
 	ApplyMaterial(StoneInstances, TileMesh, StoneMaterial, FLinearColor(0.35f, 0.37f, 0.4f));
+	ApplyMaterial(WaterInstances, TileMesh, StoneMaterial, FLinearColor(0.02f, 0.3f, 0.9f));
 	ApplyMaterial(SeedInstances, SeedMesh, GrassMaterial, FLinearColor(0.45f, 0.24f, 0.06f));
 }

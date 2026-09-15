@@ -82,12 +82,12 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	Renderer->Rebuild(Chunk, 2, 100.0f);
 	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
 	Renderer->GetComponents(Components);
-	TestEqual(TEXT("Ground and seed have renderers"), Components.Num(), 5);
+	TestEqual(TEXT("Ground and seed have renderers"), Components.Num(), 6);
 	for (auto* Component : Components)
-		TestEqual(TEXT("Each ground type renders one tile"), Component->GetInstanceCount(), 1);
+		TestEqual(TEXT("Each ground type renders one tile"), Component->GetInstanceCount(), Component->GetFName() == TEXT("WaterInstances") ? 0 : 1);
 	Renderer->Rebuild(Chunk, 2, 100.0f);
 	for (auto* Component : Components)
-		TestEqual(TEXT("Rebuilding does not duplicate tiles"), Component->GetInstanceCount(), 1);
+		TestEqual(TEXT("Rebuilding does not duplicate tiles"), Component->GetInstanceCount(), Component->GetFName() == TEXT("WaterInstances") ? 0 : 1);
 	UGameplayStatics::DeleteGameInSlot(Slot, 0);
 	World->DestroyWorld(false);
 	return true;

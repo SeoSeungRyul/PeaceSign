@@ -8,5 +8,6 @@ enum class EPSEquipment : uint8
 {
 	BareHands,
 	Hoe,
-	Seed
+	Seed,
+	FishingRod
 };
