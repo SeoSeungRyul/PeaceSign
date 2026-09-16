@@ -4,6 +4,8 @@
 #include "PSPlayerStatsComponent.h"
 #include "UI/PSPlayerStatusWidget.h"
 #include "UI/PSGameTimeWidget.h"
+#include "UI/PSInventoryWidget.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Time/PSGameTimeSubsystem.h"
 
 #include "DrawDebugHelpers.h"
@@ -204,6 +206,7 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 	Super::PlayerTick(DeltaTime);
 	UpdateFishing();
 	UpdateStatusWidget();
+	if (bInventoryOpen) return;
 	HoveredCell = GetCursorCell();
 
 	if (!HoveredCell.IsSet())
@@ -401,8 +404,44 @@ void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
 
 void APSPlayerController::HandleInventory()
 {
-	UE_LOG(LogTemp, Log, TEXT("Inventory requested"));
+	if (bInventoryOpen)
+	{
+		CloseInventory();
+		return;
+	}
+	if (!IsLocalController()) return;
+	if (!InventoryWidget)
+	{
+		UClass* Class = InventoryWidgetClass.Get();
+		InventoryWidget = CreateWidget<UPSInventoryWidget>(this, Class ? Class : UPSInventoryWidget::StaticClass());
+	}
+	if (!InventoryWidget) return;
+	InventoryWidget->AddToPlayerScreen(100);
+	bInventoryOpen = true;
+	// Temporary single-player menu policy; never unpause a pause owned by another system.
+	bInventoryOwnsPause = !IsPaused() && GetNetMode() == NM_Standalone && SetPause(true);
+	FlushPressedKeys();
+	FInputModeUIOnly InputMode;
+	InputMode.SetWidgetToFocus(InventoryWidget->TakeWidget());
+	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+	SetInputMode(InputMode);
+	bShowMouseCursor = true;
 	OnInventoryRequested();
+}
+
+void APSPlayerController::CloseInventory()
+{
+	if (!bInventoryOpen) return;
+	UWidgetBlueprintLibrary::CancelDragDrop();
+	if (InventoryWidget) InventoryWidget->RemoveFromParent();
+	bInventoryOpen = false;
+	if (bInventoryOwnsPause) SetPause(false);
+	bInventoryOwnsPause = false;
+	FInputModeGameAndUI InputMode;
+	InputMode.SetHideCursorDuringCapture(false);
+	SetInputMode(InputMode);
+	UWidgetBlueprintLibrary::SetFocusToGameViewport();
+	FlushPressedKeys();
 }
 
 void APSPlayerController::HandleQuest()
@@ -482,6 +521,8 @@ void APSPlayerController::UpdateStatusWidget()
 
 void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CloseInventory();
+	InventoryWidget = nullptr;
 	StopFishing();
 	if (TimeWidget)
 	{

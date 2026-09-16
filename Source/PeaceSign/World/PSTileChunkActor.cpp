@@ -3,6 +3,7 @@
 #include "PSTileChunkActor.h"
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Components/BoxComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
@@ -69,6 +70,7 @@ void APSTileChunkActor::OnConstruction(const FTransform& Transform)
 
 void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
 {
+	RebuildWaterCollision(ChunkData, ChunkSize, CellSize);
 	GrassInstances->ClearInstances();
 	DirtInstances->ClearInstances();
 	StoneInstances->ClearInstances();
@@ -153,6 +155,41 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	WaterInstances->AddInstances(WaterTransforms, false, false, false);
 	TilledSoilInstances->AddInstances(TilledSoilTransforms, false, false, false);
 	SeedInstances->AddInstances(SeedTransforms, false, false, false);
+}
+
+void APSTileChunkActor::RebuildWaterCollision(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
+{
+	for (UBoxComponent* Blocker : WaterBlockers)
+	{
+		if (Blocker) Blocker->DestroyComponent();
+	}
+	WaterBlockers.Reset();
+	if (ChunkSize <= 0 || CellSize <= 0 || ChunkData.Cells.Num() != ChunkSize * ChunkSize) return;
+
+	// Merge consecutive water cells in each row. Swept pawn movement, including rolls,
+	// hits the shore even when one movement step crosses the entire lake.
+	for (int32 Y = 0; Y < ChunkSize; ++Y)
+	{
+		for (int32 X = 0; X < ChunkSize;)
+		{
+			if (ChunkData.Cells[Y * ChunkSize + X].GroundType != EPSTileType::Water) { ++X; continue; }
+			const int32 StartX = X;
+			while (X < ChunkSize && ChunkData.Cells[Y * ChunkSize + X].GroundType == EPSTileType::Water) ++X;
+			UBoxComponent* Blocker = NewObject<UBoxComponent>(this, NAME_None, RF_Transient);
+			Blocker->SetupAttachment(SceneRoot);
+			Blocker->SetRelativeLocation(FVector((StartX + (X - StartX) * 0.5f) * CellSize, (Y + 0.5f) * CellSize, 0));
+			Blocker->SetBoxExtent(FVector((X - StartX) * CellSize * 0.5f, CellSize * 0.5f, 1000.0f));
+			Blocker->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			Blocker->SetCollisionObjectType(ECC_WorldStatic);
+			Blocker->SetCollisionResponseToAllChannels(ECR_Ignore);
+			Blocker->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+			Blocker->SetGenerateOverlapEvents(false);
+			Blocker->SetCanEverAffectNavigation(false);
+			Blocker->SetHiddenInGame(true);
+			Blocker->RegisterComponent();
+			WaterBlockers.Add(Blocker);
+		}
+	}
 }
 
 void APSTileChunkActor::ConfigureInstances(UHierarchicalInstancedStaticMeshComponent* Instances) const

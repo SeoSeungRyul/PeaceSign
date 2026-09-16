@@ -9,6 +9,7 @@
 
 class UPSPlayerStatusWidget;
 class UPSGameTimeWidget;
+class UPSInventoryWidget;
 class UInputAction;
 class UInputMappingContext;
 class APSGridWorld;
@@ -21,6 +22,8 @@ class PEACESIGN_API APSPlayerController : public APlayerController
 
 public:
 	APSPlayerController();
+	UFUNCTION(BlueprintCallable, Category="UI|Inventory")
+	void CloseInventory();
 	UFUNCTION(BlueprintPure, Category = "Equipment")
 	EPSEquipment GetEquipment() const { return Equipment; }
 	UFUNCTION(BlueprintPure, Category = "Farming")
@@ -37,6 +40,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	UPROPERTY(EditDefaultsOnly, Category="UI")
 	TSubclassOf<UPSPlayerStatusWidget> PlayerStatusWidgetClass;
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<UPSInventoryWidget> InventoryWidgetClass;
 	virtual void SetupInputComponent() override;
 	virtual void PlayerTick(float DeltaTime) override;
 
@@ -102,6 +107,9 @@ private:
 	void UpdateStatusWidget();
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
 	UPROPERTY(Transient) TObjectPtr<UPSGameTimeWidget> TimeWidget;
+	UPROPERTY(Transient) TObjectPtr<UPSInventoryWidget> InventoryWidget;
+	bool bInventoryOpen = false;
+	bool bInventoryOwnsPause = false;
 	TWeakObjectPtr<APawn> StatusPawn;
 	void HandleInteract();
 	void HandleSpecialAttack();

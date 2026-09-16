@@ -9,6 +9,7 @@
 class UHierarchicalInstancedStaticMeshComponent;
 class UMaterialInterface;
 class UStaticMesh;
+class UBoxComponent;
 struct FPSChunkData;
 
 UCLASS()
@@ -64,6 +65,10 @@ protected:
 	float RenderZOffset = 1.0f;
 
 private:
+	// Separate collision volumes keep the flat water surface unchanged.
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UBoxComponent>> WaterBlockers;
+	void RebuildWaterCollision(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize);
 	void ConfigureInstances(UHierarchicalInstancedStaticMeshComponent* Instances) const;
 	void ApplyMaterials();
 };
