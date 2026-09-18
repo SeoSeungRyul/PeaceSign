@@ -182,6 +182,18 @@ EPSCropType APSGridWorld::GetCropType(const FIntPoint Cell) const
 	return EPSCropType::None;
 }
 
+int32 APSGridWorld::GetCropId(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell)) return INDEX_NONE;
+	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].CropId : INDEX_NONE;
+	if (const FPSChunkSaveData* Chunk = ModifiedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].CropId : INDEX_NONE;
+	return INDEX_NONE;
+}
+
 bool APSGridWorld::CanFishFrom(const FIntPoint PlayerCell, const FIntPoint WaterCell) const
 {
 	if (!IsCellInsideWorld(PlayerCell) || !IsCellInsideWorld(WaterCell)) return false;
@@ -224,12 +236,13 @@ int32 APSGridWorld::GetCropStage(const FIntPoint Cell) const
 		? (*Cells)[Index].GrowthStage : 0;
 }
 
-EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell)
+EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell, const int32 CropId)
 {
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
+	if (CropId < 0) return EPSTileInteractionResult::NoEffect;
 	if (GetGroundTile(Cell) != EPSTileType::TilledSoil || GetCropType(Cell) != EPSCropType::None)
 		return EPSTileInteractionResult::NoEffect;
-	return SetCropType(Cell, EPSCropType::TestCrop)
+	return SetCropType(Cell, EPSCropType::TestCrop, CropId)
 		? EPSTileInteractionResult::Planted
 		: EPSTileInteractionResult::NoEffect;
 }
@@ -539,7 +552,7 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	return true;
 }
 
-bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType)
+bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType, const int32 CropId)
 {
 	if (!IsCellInsideWorld(Cell) || GetCropType(Cell) == CropType) return false;
 	EnsureGrowthUpdates();
@@ -556,6 +569,7 @@ bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType)
 		}
 	}
 	Tile.CropType = CropType;
+	Tile.CropId = CropType == EPSCropType::None ? INDEX_NONE : FMath::Max(0, CropId);
 	Tile.GrowthStage = 1;
 	Tile.PlantedHalfHour = CropType == EPSCropType::None ? -1 : GetGrowthHalfHour();
 	if (CropType != EPSCropType::None) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).AddUnique(Cell);
@@ -605,6 +619,7 @@ void APSGridWorld::LoadWorld()
 		{
 			FPSTileCell& Tile = Restored.Cells[Index];
 			if (Tile.CropType == EPSCropType::None) continue;
+			Tile.CropId = FMath::Max(0, Tile.CropId);
 			const int64 SavedStageAge = (FMath::Clamp<int32>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage) - 1)
 				* PSCropGrowth::HalfHoursPerStage;
 			const int64 TimestampAge = SaveGame->GrowthClockHalfHour >= 0 && Tile.PlantedHalfHour >= 0

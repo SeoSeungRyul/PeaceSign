@@ -3,7 +3,9 @@
 #include "Misc/AutomationTest.h"
 
 #include "InputCoreTypes.h"
+#include "InputAction.h"
 #include "InputMappingContext.h"
+#include "../PSPlayerController.h"
 
 namespace
 {
@@ -50,6 +52,18 @@ bool FPSGameplayInputMappingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Quest mapping"), HasMapping(Context, TEXT("IA_Quest"), EKeys::Q));
 	TestTrue(TEXT("Ability mapping"), HasMapping(Context, TEXT("IA_Ability"), EKeys::P));
 	TestTrue(TEXT("Craft mapping"), HasMapping(Context, TEXT("IA_Craft"), EKeys::B));
+
+	const APSPlayerController* Controller = GetDefault<APSPlayerController>();
+	TestNotNull(TEXT("Runtime hotbar context exists"), Controller->HotbarMappingContext.Get());
+	TestEqual(TEXT("Hotbar owns ten input actions"), Controller->HotbarSlotActions.Num(), 10);
+	const FKey HotbarKeys[] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
+		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero};
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(HotbarKeys); ++Index)
+	{
+		TestTrue(FString::Printf(TEXT("Hotbar key %s mapping"), *HotbarKeys[Index].ToString()),
+			HasMapping(Controller->HotbarMappingContext, Controller->HotbarSlotActions[Index]->GetFName(), HotbarKeys[Index]));
+	}
+	TestEqual(TEXT("Hotbar context has no duplicate mappings"), Controller->HotbarMappingContext->GetMappings().Num(), 10);
 
 	for (const FEnhancedActionKeyMapping& Mapping : Context->GetMappings())
 	{

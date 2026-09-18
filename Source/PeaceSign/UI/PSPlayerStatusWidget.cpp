@@ -87,24 +87,24 @@ void UPSPlayerStatusWidget::BuildEquipmentPanel()
 	SetHarvestedCropCount(0);
 }
 
-void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment)
+void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment, const int32 HotbarSlot, const int32 Quantity)
 {
 	if (!EquipmentLabel || !EquipmentHint || !EquipmentPanel) return;
 	const bool bHoe = InEquipment == EPSEquipment::Hoe;
 	const bool bSeed = InEquipment == EPSEquipment::Seed;
 	const bool bFishing = InEquipment == EPSEquipment::FishingRod;
-	EquipmentLabel->SetText(bHoe
-		? NSLOCTEXT("Equipment", "Hoe", "현재 장비  ·  괭이")
-		: bSeed
-			? NSLOCTEXT("Equipment", "Seed", "현재 장비  ·  씨앗")
-			: bFishing ? NSLOCTEXT("Equipment", "FishingRod", "현재 장비  ·  낚싯대")
-			: NSLOCTEXT("Equipment", "BareHands", "현재 장비  ·  맨손"));
+	const bool bUnusable = InEquipment == EPSEquipment::UnusableItem;
+	const FString Key = HotbarSlot == 9 ? TEXT("0") : HotbarSlot >= 0 ? FString::FromInt(HotbarSlot + 1) : TEXT("-");
+	const FString ItemName = bHoe ? TEXT("괭이") : bSeed ? TEXT("씨앗") : bFishing ? TEXT("낚싯대") : bUnusable ? TEXT("사용할 수 없는 아이템") : TEXT("맨손");
+	const FString Count = bSeed ? FString::Printf(TEXT("  x%d"), FMath::Max(0, Quantity)) : TEXT("");
+	EquipmentLabel->SetText(FText::FromString(FString::Printf(TEXT("[%s] 현재 장비  ·  %s%s"), *Key, *ItemName, *Count)));
 	EquipmentHint->SetText(bHoe
-		? NSLOCTEXT("Equipment", "HoeHint", "우클릭 · 밭 갈기 / 다 자란 작물 수확\n[1] 괭이  [2] 씨앗  [3] 낚싯대  [0] 맨손")
+		? NSLOCTEXT("Equipment", "HoeHint", "우클릭 · 밭 갈기 / 다 자란 작물 수확\n[1~0] 인벤토리 첫 줄 선택")
 		: bSeed
-			? NSLOCTEXT("Equipment", "SeedHint", "우클릭 · 씨앗 심기\n[1] 괭이  [2] 씨앗  [3] 낚싯대  [0] 맨손")
-			: bFishing ? NSLOCTEXT("Equipment", "FishingRodHint", "직선 2칸 / 대각선 1칸 내 물칸 우클릭 · 낚시 시작 / 이동 시 해제\n[1] 괭이  [2] 씨앗  [3] 낚싯대  [0] 맨손")
-			: NSLOCTEXT("Equipment", "BareHandsHint", "우클릭 · 작물 제거\n[1] 괭이  [2] 씨앗  [3] 낚싯대  [0] 맨손"));
+			? NSLOCTEXT("Equipment", "SeedHint", "우클릭 · 씨앗 1개 심기\n[1~0] 인벤토리 첫 줄 선택")
+			: bFishing ? NSLOCTEXT("Equipment", "FishingRodHint", "직선 2칸 / 대각선 1칸 내 물칸 우클릭 · 낚시 시작 / 이동 시 해제\n[1~0] 인벤토리 첫 줄 선택")
+			: bUnusable ? NSLOCTEXT("Equipment", "UnusableHint", "이 아이템은 아직 사용할 수 없습니다.\n[1~0] 인벤토리 첫 줄 선택")
+			: NSLOCTEXT("Equipment", "BareHandsHint", "우클릭 · 작물 제거\n[1~0] 인벤토리 첫 줄 선택 · 빈 슬롯은 맨손"));
 	EquipmentLabel->SetColorAndOpacity(FSlateColor(bHoe
 		? FLinearColor(1.0f, 0.8f, 0.25f)
 		: bSeed ? FLinearColor(0.5f, 1.0f, 0.45f) : bFishing ? FLinearColor(0.3f, 0.8f, 1.0f) : FLinearColor::White));

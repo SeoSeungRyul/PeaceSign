@@ -25,7 +25,8 @@ enum class EPSTileInteractionResult : uint8
 	Mined,
 	Planted,
 	Harvested,
-	CropRemoved
+	CropRemoved,
+	InventoryFull
 };
 
 UENUM(BlueprintType)
@@ -45,6 +46,10 @@ struct FPSTileCell
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSCropType CropType = EPSCropType::None;
+
+	/** ID from the crop data sheet. INDEX_NONE means that no crop is planted. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	int32 CropId = INDEX_NONE;
 
 	// -1 denotes a legacy crop without a planting timestamp.
 	UPROPERTY(SaveGame)
