@@ -3,6 +3,7 @@
 #include "../World/PSGridWorld.h"
 #include "../World/PSTileChunkActor.h"
 #include "../PSPlayerController.h"
+#include "../Inventory/PSInventoryComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "EnhancedInputComponent.h"
 #include "Engine/World.h"
@@ -66,7 +67,13 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Water cannot be tilled"), Grid->TillCell(Water), EPSTileInteractionResult::NoEffect);
 	TestEqual(TEXT("Water cannot be planted"), Grid->PlantSeed(Water), EPSTileInteractionResult::NoEffect);
 
-	APSPlayerController* Controller = World->SpawnActor<APSPlayerController>();
+	APSPlayerController* Controller = World->SpawnActorDeferred<APSPlayerController>(
+		APSPlayerController::StaticClass(), FTransform::Identity);
+	Controller->InventoryComponent->SaveSlotName = TEXT("FishingInventoryTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	Controller->InventoryComponent->bAutoSave = false;
+	Controller->FinishSpawning(FTransform::Identity);
+	Controller->InventoryComponent->ResetToDefaults();
+	TestEqual(TEXT("Starter fishing rod occupies hotbar slot three"), Controller->InventoryComponent->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
 	APawn* Pawn = World->SpawnActor<APawn>();
 	USceneComponent* Root = NewObject<USceneComponent>(Pawn);
 	Pawn->SetRootComponent(Root);
@@ -75,17 +82,8 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->GridWorld = Grid;
 	Pawn->SetActorLocation(Grid->CellToWorldCenter(Shore));
 	TestFalse(TEXT("Rod cannot be used without equipping"), Controller->TryUseFishingRod(Water));
-	Controller->InputComponent = NewObject<UEnhancedInputComponent>(Controller);
-	Controller->SetupInputComponent();
-	bool bBoundThree = false;
-	for (FInputKeyBinding& Binding : Controller->InputComponent->KeyBindings)
-		if (Binding.Chord.Key == EKeys::Three && Binding.KeyEvent == IE_Pressed)
-		{
-			Binding.KeyDelegate.Execute(EKeys::Three);
-			bBoundThree = true;
-		}
-	TestTrue(TEXT("3 key is bound"), bBoundThree);
-	TestEqual(TEXT("3 equips rod"), Controller->GetEquipment(), EPSEquipment::FishingRod);
+	Controller->SelectHotbarSlot(2);
+	TestEqual(TEXT("Third hotbar slot equips rod"), Controller->GetEquipment(), EPSEquipment::FishingRod);
 	TestTrue(TEXT("Equipped rod works on adjacent water"), Controller->TryUseFishingRod(Water));
 	for (int32 Frame = 0; Frame < 180; ++Frame) Controller->UpdateFishing();
 	TestTrue(TEXT("One click keeps fishing active across frames"), Controller->IsFishing());
@@ -98,9 +96,9 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Movement within the same cell stops fishing"), Controller->IsFishing());
 	Pawn->SetActorLocation(Grid->CellToWorldCenter(Shore - FIntPoint(1, 0)));
 	TestTrue(TEXT("Controller permits two-cell cast"), Controller->TryUseFishingRod(Water));
-	Controller->EquipHoe();
+	Controller->SelectHotbarSlot(0);
 	TestFalse(TEXT("Changing equipment stops fishing"), Controller->IsFishing());
-	Controller->EquipFishingRod();
+	Controller->SelectHotbarSlot(2);
 	TestTrue(TEXT("Can start again after equipment change"), Controller->TryUseFishingRod(Water));
 	Controller->UnPossess();
 	Controller->UpdateFishing();

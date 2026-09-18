@@ -37,13 +37,16 @@ public:
 	EPSCropType GetCropType(FIntPoint Cell) const;
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
+	int32 GetCropId(FIntPoint Cell) const;
+
+	UFUNCTION(BlueprintPure, Category = "Grid World")
 	int32 GetCropStage(FIntPoint Cell) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult TillCell(FIntPoint Cell);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
-	EPSTileInteractionResult PlantSeed(FIntPoint Cell);
+	EPSTileInteractionResult PlantSeed(FIntPoint Cell, int32 CropId = 0);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult HarvestCrop(FIntPoint Cell);
@@ -102,6 +105,7 @@ protected:
 private:
 	friend class FPSCropGrowthTest;
 	friend class FPSFishingTest;
+	friend class FPSFarmingInventoryTest;
 	bool IsLakeCell(FIntPoint Cell) const;
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();
@@ -116,7 +120,7 @@ private:
 	void SpawnChunkRenderer(FIntPoint ChunkCoordinate);
 	void RebuildChunk(FIntPoint ChunkCoordinate);
 	bool SetGroundTile(FIntPoint Cell, EPSTileType GroundType);
-	bool SetCropType(FIntPoint Cell, EPSCropType CropType);
+	bool SetCropType(FIntPoint Cell, EPSCropType CropType, int32 CropId = -1);
 	bool IsCellInsideWorld(FIntPoint Cell) const;
 	void LoadWorld();
 	void SaveWorld() const;

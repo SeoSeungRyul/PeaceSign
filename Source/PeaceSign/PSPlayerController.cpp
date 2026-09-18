@@ -5,6 +5,8 @@
 #include "UI/PSPlayerStatusWidget.h"
 #include "UI/PSGameTimeWidget.h"
 #include "UI/PSInventoryWidget.h"
+#include "UI/PSHotbarWidget.h"
+#include "Inventory/PSInventoryComponent.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Time/PSGameTimeSubsystem.h"
 
@@ -19,6 +21,7 @@
 #include "InputCoreTypes.h"
 #include "InputMappingContext.h"
 #include "UObject/ConstructorHelpers.h"
+#include "World/PSCropGrowth.h"
 #include "World/PSGridWorld.h"
 
 namespace
@@ -57,6 +60,8 @@ namespace
 			return TEXT("Crop harvested");
 		case EPSTileInteractionResult::CropRemoved:
 			return TEXT("Crop removed");
+		case EPSTileInteractionResult::InventoryFull:
+			return TEXT("Inventory is full. Crop was not harvested.");
 		case EPSTileInteractionResult::NoEffect:
 			return TEXT("This tile has no interaction yet");
 		case EPSTileInteractionResult::InvalidCell:
@@ -68,6 +73,24 @@ namespace
 
 APSPlayerController::APSPlayerController()
 {
+	InventoryComponent = CreateDefaultSubobject<UPSInventoryComponent>(TEXT("InventoryComponent"));
+	HotbarMappingContext = CreateDefaultSubobject<UInputMappingContext>(TEXT("IMC_Hotbar"));
+	HotbarSlotActions.Reset();
+	const FKey HotbarKeys[] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
+		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero};
+	for (int32 Index = 0; Index < UE_ARRAY_COUNT(HotbarKeys); ++Index)
+	{
+		UInputAction* Action = CreateDefaultSubobject<UInputAction>(
+			*FString::Printf(TEXT("IA_HotbarSlot%d"), Index + 1));
+		Action->ValueType = EInputActionValueType::Boolean;
+		HotbarSlotActions.Add(Action);
+		const bool bAlreadyMapped = HotbarMappingContext->GetMappings().ContainsByPredicate(
+			[Action, Key = HotbarKeys[Index]](const FEnhancedActionKeyMapping& Mapping)
+			{
+				return Mapping.Action && Mapping.Action->GetFName() == Action->GetFName() && Mapping.Key == Key;
+			});
+		if (!bAlreadyMapped) HotbarMappingContext->MapKey(Action, HotbarKeys[Index]);
+	}
 	static ConstructorHelpers::FObjectFinder<UInputMappingContext> GameplayMappingContextFinder(
 		TEXT("/Game/Inputs/IMC_Gameplay.IMC_Gameplay"));
 	static ConstructorHelpers::FObjectFinder<UInputAction> InteractActionFinder(
@@ -95,11 +118,22 @@ APSPlayerController::APSPlayerController()
 void APSPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
-	SetEquipment(EPSEquipment::BareHands);
+	if (InventoryComponent)
+	{
+		InventoryComponent->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshEquipmentFromHotbar);
+	}
+	RefreshEquipmentFromHotbar();
 	if (IsLocalController())
 	{
 		TimeWidget = CreateWidget<UPSGameTimeWidget>(this, UPSGameTimeWidget::StaticClass());
 		if (TimeWidget) TimeWidget->AddToPlayerScreen();
+		UClass* Class = HotbarWidgetClass.Get();
+		HotbarWidget = CreateWidget<UPSHotbarWidget>(this, Class ? Class : UPSHotbarWidget::StaticClass());
+		if (HotbarWidget)
+		{
+			HotbarWidget->SetInventoryComponent(InventoryComponent);
+			HotbarWidget->AddToViewport(300);
+		}
 	}
 
 	bShowMouseCursor = true;
@@ -160,6 +194,10 @@ void APSPlayerController::BeginPlay()
 
 		InputSubsystem->AddMappingContext(GameplayMappingContext, 0);
 	}
+	if (InputSubsystem && HotbarMappingContext)
+	{
+		InputSubsystem->AddMappingContext(HotbarMappingContext, 1);
+	}
 }
 
 void APSPlayerController::SetupInputComponent()
@@ -191,13 +229,17 @@ void APSPlayerController::SetupInputComponent()
 	{
 		EnhancedInputComponent->BindAction(CraftAction, ETriggerEvent::Started, this, &APSPlayerController::HandleCraft);
 	}
+	for (int32 Index = 0; Index < HotbarSlotActions.Num(); ++Index)
+	{
+		if (HotbarSlotActions[Index])
+		{
+			EnhancedInputComponent->BindAction(HotbarSlotActions[Index], ETriggerEvent::Started,
+				this, &ThisClass::HandleHotbarSlot, Index);
+		}
+	}
 
 	// R is a development-only world reset shortcut and is intentionally not part of the gameplay IA set.
 	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &APSPlayerController::HandleResetWorld);
-	InputComponent->BindKey(EKeys::Zero, IE_Pressed, this, &APSPlayerController::EquipBareHands);
-	InputComponent->BindKey(EKeys::One, IE_Pressed, this, &APSPlayerController::EquipHoe);
-	InputComponent->BindKey(EKeys::Two, IE_Pressed, this, &APSPlayerController::EquipSeed);
-	InputComponent->BindKey(EKeys::Three, IE_Pressed, this, &APSPlayerController::EquipFishingRod);
 	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &APSPlayerController::HandleAdvanceTime);
 }
 
@@ -274,43 +316,20 @@ void APSPlayerController::HandleSpecialAttack()
 	}
 	// Resolve the cursor at click time, not from the previous frame's highlight.
 	const TOptional<FIntPoint> TargetCell = GetCursorCell();
-	if (Equipment == EPSEquipment::BareHands)
+	if (TargetCell.IsSet())
 	{
-		if (TargetCell.IsSet())
+		const EPSTileInteractionResult Result = UseEquippedItemOnCell(TargetCell.GetValue());
+		if (Equipment == EPSEquipment::BareHands)
 		{
-			const EPSTileInteractionResult Result = GridWorld->RemoveCrop(TargetCell.GetValue());
 			if (Result == EPSTileInteractionResult::CropRemoved)
 			{
 				if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Yellow, GetInteractionResultText(Result));
 				return;
 			}
-		}
-		OnSpecialAttackRequested();
-		return;
-	}
-	if (TargetCell.IsSet())
-	{
-		EPSTileInteractionResult Result = EPSTileInteractionResult::NoEffect;
-		switch (Equipment)
-		{
-		case EPSEquipment::Hoe:
-			Result = GridWorld->HarvestCrop(TargetCell.GetValue());
-			if (Result == EPSTileInteractionResult::NoEffect)
-				Result = GridWorld->TillCell(TargetCell.GetValue());
-			if (Result == EPSTileInteractionResult::Harvested)
-			{
-				++HarvestedCropCount;
-				if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
-			}
-			break;
-		case EPSEquipment::Seed:
-			Result = GridWorld->PlantSeed(TargetCell.GetValue());
-			break;
-		case EPSEquipment::BareHands:
-		default:
+			OnSpecialAttackRequested();
 			return;
 		}
-		if (GEngine)
+		if (Equipment != EPSEquipment::UnusableItem && GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(
 				INDEX_NONE,
@@ -319,26 +338,88 @@ void APSPlayerController::HandleSpecialAttack()
 				GetInteractionResultText(Result));
 		}
 	}
+	else if (Equipment == EPSEquipment::BareHands)
+	{
+		OnSpecialAttackRequested();
+	}
 }
 
-void APSPlayerController::EquipBareHands()
+EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPoint Cell)
 {
-	SetEquipment(EPSEquipment::BareHands);
+	if (!GridWorld) return EPSTileInteractionResult::InvalidCell;
+	switch (Equipment)
+	{
+	case EPSEquipment::BareHands:
+		return GridWorld->RemoveCrop(Cell);
+	case EPSEquipment::Hoe:
+	{
+		const bool bMatureCrop = GridWorld->GetCropType(Cell) != EPSCropType::None
+			&& GridWorld->GetCropStage(Cell) >= PSCropGrowth::MaxStage;
+		const int32 CropId = GridWorld->GetCropId(Cell);
+		if (bMatureCrop && (!InventoryComponent
+			|| !InventoryComponent->CanAddItem(EPSItemType::TestCrop, 1, CropId)))
+			return EPSTileInteractionResult::InventoryFull;
+		EPSTileInteractionResult Result = GridWorld->HarvestCrop(Cell);
+		if (Result != EPSTileInteractionResult::Harvested) return GridWorld->TillCell(Cell);
+		if (!InventoryComponent->AddItem(EPSItemType::TestCrop, 1, CropId))
+		{
+			ensureMsgf(false, TEXT("Harvest capacity changed after it was validated."));
+			return EPSTileInteractionResult::NoEffect;
+		}
+		++HarvestedCropCount;
+		if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
+		return Result;
+	}
+	case EPSEquipment::Seed:
+	{
+		const FPSItemStack* Seed = InventoryComponent
+			? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
+		if (!Seed || Seed->ItemType != EPSItemType::TestSeed || Seed->Quantity <= 0)
+			return EPSTileInteractionResult::NoEffect;
+		const EPSTileInteractionResult Result = GridWorld->PlantSeed(Cell, Seed->CropId);
+		if (Result == EPSTileInteractionResult::Planted
+			&& !InventoryComponent->RemoveFromHotbarSlot(SelectedHotbarSlot, 1))
+		{
+			GridWorld->RemoveCrop(Cell);
+			return EPSTileInteractionResult::NoEffect;
+		}
+		return Result;
+	}
+	case EPSEquipment::FishingRod:
+	case EPSEquipment::UnusableItem:
+	default:
+		return EPSTileInteractionResult::NoEffect;
+	}
 }
 
-void APSPlayerController::EquipHoe()
+void APSPlayerController::HandleHotbarSlot(const FInputActionValue& Value, const int32 SlotIndex)
 {
-	SetEquipment(EPSEquipment::Hoe);
+	SelectHotbarSlot(SlotIndex);
 }
 
-void APSPlayerController::EquipSeed()
+void APSPlayerController::SelectHotbarSlot(const int32 SlotIndex)
 {
-	SetEquipment(EPSEquipment::Seed);
+	if (!InventoryComponent || !InventoryComponent->IsHotbarSlot(SlotIndex)) return;
+	InventoryComponent->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshEquipmentFromHotbar);
+	SelectedHotbarSlot = SlotIndex;
+	RefreshEquipmentFromHotbar();
 }
 
-void APSPlayerController::EquipFishingRod()
+void APSPlayerController::RefreshEquipmentFromHotbar()
 {
-	SetEquipment(EPSEquipment::FishingRod);
+	EPSEquipment NewEquipment = EPSEquipment::BareHands;
+	const FPSItemStack* Stack = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
+	if (Stack && !Stack->IsEmpty())
+	{
+		switch (Stack->ItemType)
+		{
+		case EPSItemType::Hoe: NewEquipment = EPSEquipment::Hoe; break;
+		case EPSItemType::TestSeed: NewEquipment = EPSEquipment::Seed; break;
+		case EPSItemType::FishingRod: NewEquipment = EPSEquipment::FishingRod; break;
+		default: NewEquipment = EPSEquipment::UnusableItem; break;
+		}
+	}
+	SetEquipment(NewEquipment);
 }
 
 void APSPlayerController::HandleFishingRod()
@@ -399,7 +480,8 @@ void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
 {
 	if (Equipment != InEquipment) StopFishing();
 	Equipment = InEquipment;
-	if (StatusWidget) StatusWidget->SetEquipment(Equipment);
+	const FPSItemStack* Stack = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
+	if (StatusWidget) StatusWidget->SetEquipment(Equipment, SelectedHotbarSlot, Stack ? Stack->Quantity : 0);
 }
 
 void APSPlayerController::HandleInventory()
@@ -414,6 +496,7 @@ void APSPlayerController::HandleInventory()
 	{
 		UClass* Class = InventoryWidgetClass.Get();
 		InventoryWidget = CreateWidget<UPSInventoryWidget>(this, Class ? Class : UPSInventoryWidget::StaticClass());
+		if (InventoryWidget) InventoryWidget->SetInventoryComponent(InventoryComponent);
 	}
 	if (!InventoryWidget) return;
 	InventoryWidget->AddToPlayerScreen(100);
@@ -473,6 +556,8 @@ void APSPlayerController::HandleResetWorld()
 	if (bResetSucceeded)
 	{
 		StopFishing();
+		SelectedHotbarSlot = INDEX_NONE;
+		if (InventoryComponent) InventoryComponent->ResetToDefaults();
 		HarvestedCropCount = 0;
 		if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
 	}
@@ -507,7 +592,8 @@ void APSPlayerController::UpdateStatusWidget()
 		StatusWidget->AddToPlayerScreen();
 		StatusWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
 		StatusWidget->SetDesiredSizeInViewport(FVector2D(280.0f, 340.0f));
-		StatusWidget->SetEquipment(Equipment);
+		const FPSItemStack* Stack = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
+		StatusWidget->SetEquipment(Equipment, SelectedHotbarSlot, Stack ? Stack->Quantity : 0);
 		StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
 		StatusPawn = GetPawn();
 		StatusWidget->SetStatsComponent(GetPawn() ? GetPawn()->FindComponentByClass<UPSPlayerStatsComponent>() : nullptr);
@@ -521,8 +607,17 @@ void APSPlayerController::UpdateStatusWidget()
 
 void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (InventoryComponent)
+	{
+		InventoryComponent->OnInventoryChanged.RemoveDynamic(this, &ThisClass::RefreshEquipmentFromHotbar);
+	}
 	CloseInventory();
 	InventoryWidget = nullptr;
+	if (HotbarWidget)
+	{
+		HotbarWidget->RemoveFromParent();
+		HotbarWidget = nullptr;
+	}
 	StopFishing();
 	if (TimeWidget)
 	{
@@ -537,6 +632,10 @@ void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 			if (GameplayMappingContext)
 			{
 				InputSubsystem->RemoveMappingContext(GameplayMappingContext);
+			}
+			if (HotbarMappingContext)
+			{
+				InputSubsystem->RemoveMappingContext(HotbarMappingContext);
 			}
 		}
 	}

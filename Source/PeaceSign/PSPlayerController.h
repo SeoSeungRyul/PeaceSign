@@ -10,9 +10,13 @@
 class UPSPlayerStatusWidget;
 class UPSGameTimeWidget;
 class UPSInventoryWidget;
+class UPSHotbarWidget;
+class UPSInventoryComponent;
 class UInputAction;
 class UInputMappingContext;
 class APSGridWorld;
+struct FInputActionValue;
+enum class EPSTileInteractionResult : uint8;
 
 /** Owns local-player input modes and mapping contexts. */
 UCLASS()
@@ -28,6 +32,12 @@ public:
 	EPSEquipment GetEquipment() const { return Equipment; }
 	UFUNCTION(BlueprintPure, Category = "Farming")
 	int32 GetHarvestedCropCount() const { return HarvestedCropCount; }
+	UFUNCTION(BlueprintPure, Category = "Inventory")
+	UPSInventoryComponent* GetInventoryComponent() const { return InventoryComponent; }
+	UFUNCTION(BlueprintCallable, Category = "Inventory|Hotbar")
+	void SelectHotbarSlot(int32 SlotIndex);
+	UFUNCTION(BlueprintPure, Category = "Inventory|Hotbar")
+	int32 GetSelectedHotbarSlot() const { return SelectedHotbarSlot; }
 
 	UFUNCTION(BlueprintCallable, Category = "Fishing")
 	bool TryUseFishingRod(FIntPoint WaterCell);
@@ -42,6 +52,8 @@ protected:
 	TSubclassOf<UPSPlayerStatusWidget> PlayerStatusWidgetClass;
 	UPROPERTY(EditDefaultsOnly, Category="UI")
 	TSubclassOf<UPSInventoryWidget> InventoryWidgetClass;
+	UPROPERTY(EditDefaultsOnly, Category="UI")
+	TSubclassOf<UPSHotbarWidget> HotbarWidgetClass;
 	virtual void SetupInputComponent() override;
 	virtual void PlayerTick(float DeltaTime) override;
 
@@ -89,16 +101,17 @@ protected:
 
 private:
 	friend class FPSFishingTest;
-	void EquipFishingRod();
+	friend class FPSFarmingInventoryTest;
+	friend class FPSGameplayInputMappingTest;
 	void HandleFishingRod();
 	void UpdateFishing();
 	void StopFishing();
 	TOptional<FIntPoint> FishingCell;
 	TWeakObjectPtr<APawn> FishingPawn;
 	FVector FishingStartLocation = FVector::ZeroVector;
-	void EquipBareHands();
-	void EquipHoe();
-	void EquipSeed();
+	void HandleHotbarSlot(const FInputActionValue& Value, int32 SlotIndex);
+	UFUNCTION() void RefreshEquipmentFromHotbar();
+	EPSTileInteractionResult UseEquippedItemOnCell(FIntPoint Cell);
 	void SetEquipment(EPSEquipment InEquipment);
 	UPROPERTY(Transient)
 	EPSEquipment Equipment = EPSEquipment::BareHands;
@@ -108,6 +121,15 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UPSPlayerStatusWidget> StatusWidget;
 	UPROPERTY(Transient) TObjectPtr<UPSGameTimeWidget> TimeWidget;
 	UPROPERTY(Transient) TObjectPtr<UPSInventoryWidget> InventoryWidget;
+	UPROPERTY(Transient) TObjectPtr<UPSHotbarWidget> HotbarWidget;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inventory", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UPSInventoryComponent> InventoryComponent;
+	UPROPERTY(Transient)
+	TObjectPtr<UInputMappingContext> HotbarMappingContext;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UInputAction>> HotbarSlotActions;
+	UPROPERTY(Transient)
+	int32 SelectedHotbarSlot = INDEX_NONE;
 	bool bInventoryOpen = false;
 	bool bInventoryOwnsPause = false;
 	TWeakObjectPtr<APawn> StatusPawn;

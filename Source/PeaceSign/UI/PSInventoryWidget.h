@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
 #include "Blueprint/DragDropOperation.h"
+#include "../Inventory/PSInventoryComponent.h"
 #include "PSInventoryWidget.generated.h"
 
 class UBorder;
@@ -10,25 +11,13 @@ class UTextBlock;
 class UTexture2D;
 class UPSInventoryWidget;
 
-/** Presentation-only sample. Replace with inventory item data when gameplay inventory is ready. */
-USTRUCT(BlueprintType)
-struct FPSInventoryPreviewItem
-{
-	GENERATED_BODY()
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) FText Name;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) FText Description;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 Quantity = 0;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) TObjectPtr<UTexture2D> Icon = nullptr;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) FLinearColor Color = FLinearColor::White;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite) int32 PlaceholderIcon = 0;
-};
-
 UCLASS()
 class PEACESIGN_API UPSInventoryDragOperation : public UDragDropOperation
 {
 	GENERATED_BODY()
 public:
-	UPROPERTY() TObjectPtr<UPSInventoryWidget> Inventory;
+	UPROPERTY() TObjectPtr<UPSInventoryComponent> InventoryComponent;
+	UPROPERTY() EPSInventoryArea SourceArea = EPSInventoryArea::Bag;
 	int32 SourceIndex = INDEX_NONE;
 };
 
@@ -57,22 +46,28 @@ class PEACESIGN_API UPSInventoryWidget : public UUserWidget
 	GENERATED_BODY()
 public:
 	UPSInventoryWidget(const FObjectInitializer& ObjectInitializer);
-	const FPSInventoryPreviewItem* GetItem(int32 Index) const;
-	bool IsUnlocked(int32 Index) const { return Index >= 0 && Index < 10; }
+	void SetInventoryComponent(UPSInventoryComponent* InInventory);
+	const FPSItemStack* GetItem(int32 Index) const;
+	bool IsUnlocked(int32 Index) const;
 	bool MoveItem(int32 From, int32 To);
 	void SelectItem(int32 Index);
 	int32 GetSelectedIndex() const { return SelectedIndex; }
+	UPSInventoryComponent* GetInventoryComponent() const { return InventoryComponent; }
 	UFUNCTION(BlueprintCallable, Category="Inventory") void CloseInventory();
 	// These brushes accept artist textures in a Widget Blueprint child without changing interaction code.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush SlotBrush;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush SelectedSlotBrush;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush HoverSlotBrush;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Preview") TArray<FPSInventoryPreviewItem> PreviewItems;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") TMap<EPSItemType, TObjectPtr<UTexture2D>> ItemIcons;
 protected:
 	virtual void NativeOnInitialized() override;
+	virtual void NativeConstruct() override;
+	virtual void NativeDestruct() override;
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry&, const FKeyEvent&) override;
 private:
 	friend class FPSInventoryPreviewTest;
+	UFUNCTION() void RefreshInventory();
+	UPROPERTY(Transient) TObjectPtr<UPSInventoryComponent> InventoryComponent;
 	UPROPERTY() TObjectPtr<UTextBlock> DetailName;
 	UPROPERTY() TObjectPtr<UTextBlock> DetailDescription;
 	UPROPERTY() TObjectPtr<UTextBlock> DetailCount;

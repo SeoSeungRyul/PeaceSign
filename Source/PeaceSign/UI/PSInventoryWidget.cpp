@@ -1,5 +1,6 @@
 #include "PSInventoryWidget.h"
 #include "../PSPlayerController.h"
+#include "../Inventory/PSInventoryComponent.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
@@ -42,27 +43,11 @@ UPSInventoryWidget::UPSInventoryWidget(const FObjectInitializer& ObjectInitializ
 	SelectedSlotBrush.TintColor = Hex(TEXT("FF8F00"));
 	HoverSlotBrush = SlotBrush;
 	HoverSlotBrush.TintColor = Hex(TEXT("FFD54F"));
-	const auto Add = [this](const TCHAR* Name, const TCHAR* Description, int32 Count, const TCHAR* Color, int32 Icon)
-	{
-		FPSInventoryPreviewItem& Item = PreviewItems.AddDefaulted_GetRef();
-		Item.Name = FText::FromString(Name);
-		Item.Description = FText::FromString(Description);
-		Item.Quantity = Count;
-		Item.Color = Hex(Color);
-		Item.PlaceholderIcon = Icon;
-	};
-	Add(TEXT("괭이"), TEXT("도구\n밭을 가꾸는 데 사용하는 기본 도구입니다."), 1, TEXT("BFD3C5"), 0);
-	Add(TEXT("씨앗"), TEXT("농사 재료\n갈아 놓은 땅에 심을 작은 씨앗입니다."), 24, TEXT("A8C66C"), 1);
-	Add(TEXT("수확한 작물"), TEXT("식량\n정성껏 가꾼 밭에서 거둔 작물입니다."), 8, TEXT("ECAC62"), 2);
-	Add(TEXT("목재"), TEXT("제작 재료\n건축과 제작에 사용하는 나무입니다."), 36, TEXT("C58A58"), 3);
-	Add(TEXT("돌"), TEXT("제작 재료\n다양한 시설의 재료로 쓰이는 돌입니다."), 999, TEXT("B4B9BF"), 4);
-	Add(TEXT("물고기"), TEXT("식량\n물에서 낚아 올린 작은 물고기입니다."), 3, TEXT("7CC5CF"), 5);
 }
 
 void UPSInventoryWidget::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
-	PreviewItems.SetNum(10);
 	auto* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>();
 	WidgetTree->RootWidget = Canvas;
 	auto* Shade = WidgetTree->ConstructWidget<UBorder>();
@@ -101,7 +86,7 @@ void UPSInventoryWidget::NativeOnInitialized()
 	Close->SetContent(Label(WidgetTree, TEXT("  닫기  [I / Esc]  "), 15, Hex(TEXT("FFF0D1"))));
 	Close->OnClicked.AddDynamic(this, &ThisClass::CloseInventory);
 	Header->AddChildToHorizontalBox(Close)->SetVerticalAlignment(VAlign_Center);
-	Rows->AddChildToVerticalBox(Label(WidgetTree, TEXT("임시 UI · 샘플 아이템으로 배치와 이동을 확인할 수 있습니다."), 14, Hex(TEXT("C6B59B"))))->SetPadding(FMargin(0, 12, 0, 22));
+	Rows->AddChildToVerticalBox(Label(WidgetTree, TEXT("가방과 화면 아래 단축 슬롯 사이로 아이템을 옮길 수 있습니다."), 14, Hex(TEXT("C6B59B"))))->SetPadding(FMargin(0, 12, 0, 22));
 	auto* Body = WidgetTree->ConstructWidget<UHorizontalBox>();
 	Rows->AddChildToVerticalBox(Body)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	auto* Bag = WidgetTree->ConstructWidget<UVerticalBox>();
@@ -121,7 +106,7 @@ void UPSInventoryWidget::NativeOnInitialized()
 		SlotSize->SetContent(Cell);
 		Grid->AddChildToUniformGrid(SlotSize, Index / 10, Index % 10);
 	}
-	Bag->AddChildToVerticalBox(Label(WidgetTree, TEXT("잠긴 줄은 가방 확장 시 열립니다 · 최대 50칸"), 13, Hex(TEXT("BDA687"))))->SetPadding(FMargin(3, 16, 0, 0));
+	Bag->AddChildToVerticalBox(Label(WidgetTree, TEXT("현재 가방 10칸 · 잠긴 줄은 가방 확장 시 열립니다"), 13, Hex(TEXT("BDA687"))))->SetPadding(FMargin(3, 16, 0, 0));
 	Bag->AddChildToVerticalBox(Label(WidgetTree, TEXT("다음 확장  20칸 / 1,000골드   ·   구매 기능 준비 중"), 13, Hex(TEXT("BDA687"))))->SetPadding(FMargin(3, 8, 0, 0));
 	auto* DetailSize = WidgetTree->ConstructWidget<USizeBox>();
 	DetailSize->SetWidthOverride(280);
@@ -140,21 +125,48 @@ void UPSInventoryWidget::NativeOnInitialized()
 	DetailDescription = Label(WidgetTree, TEXT(""), 16, Hex(TEXT("D1C4AF")));
 	DetailDescription->SetAutoWrapText(true);
 	DetailRows->AddChildToVerticalBox(DetailDescription)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
-	auto* Note = Label(WidgetTree, TEXT("샘플 아이템\n실제 보유량과는 별개입니다."), 13, Hex(TEXT("AC977B")));
+	auto* Note = Label(WidgetTree, TEXT("아이템 이동과 수량은\n자동으로 저장됩니다."), 13, Hex(TEXT("AC977B")));
 	DetailRows->AddChildToVerticalBox(Note);
 	Rows->AddChildToVerticalBox(Label(WidgetTree, TEXT("클릭  선택     /     드래그  이동 · 교환     /     I 또는 Esc  닫기"), 14, Hex(TEXT("EAD2AC"))))->SetPadding(FMargin(0, 20, 0, 0));
 	SelectItem(0);
 }
 
-const FPSInventoryPreviewItem* UPSInventoryWidget::GetItem(int32 Index) const
+void UPSInventoryWidget::NativeConstruct()
 {
-	return PreviewItems.IsValidIndex(Index) && PreviewItems[Index].Quantity > 0 ? &PreviewItems[Index] : nullptr;
+	Super::NativeConstruct();
+	if (InventoryComponent) InventoryComponent->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshInventory);
+	RefreshInventory();
+}
+
+void UPSInventoryWidget::NativeDestruct()
+{
+	if (InventoryComponent) InventoryComponent->OnInventoryChanged.RemoveDynamic(this, &ThisClass::RefreshInventory);
+	Super::NativeDestruct();
+}
+
+void UPSInventoryWidget::SetInventoryComponent(UPSInventoryComponent* InInventory)
+{
+	if (InventoryComponent) InventoryComponent->OnInventoryChanged.RemoveDynamic(this, &ThisClass::RefreshInventory);
+	InventoryComponent = InInventory;
+	if (InventoryComponent) InventoryComponent->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshInventory);
+	RefreshInventory();
+}
+
+const FPSItemStack* UPSInventoryWidget::GetItem(const int32 Index) const
+{
+	if (!InventoryComponent || !InventoryComponent->IsBagSlotUnlocked(Index)) return nullptr;
+	const FPSItemStack* Item = InventoryComponent->FindBagSlot(Index);
+	return Item && !Item->IsEmpty() ? Item : nullptr;
+}
+
+bool UPSInventoryWidget::IsUnlocked(const int32 Index) const
+{
+	return InventoryComponent && InventoryComponent->IsBagSlotUnlocked(Index);
 }
 
 bool UPSInventoryWidget::MoveItem(int32 From, int32 To)
 {
-	if (!IsUnlocked(From) || !IsUnlocked(To) || !GetItem(From) || From == To) return false;
-	PreviewItems.Swap(From, To);
+	if (!InventoryComponent || !InventoryComponent->MoveItem(EPSInventoryArea::Bag, From, EPSInventoryArea::Bag, To)) return false;
 	SelectItem(To);
 	return true;
 }
@@ -165,12 +177,20 @@ void UPSInventoryWidget::SelectItem(int32 Index)
 	SelectedIndex = Index;
 	if (!DetailName) return;
 	const auto* Item = GetItem(Index);
-	DetailName->SetText(Item ? Item->Name : FText::FromString(TEXT("빈 슬롯")));
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(Item ? Item->ItemType : EPSItemType::None);
+	DetailName->SetText(Definition.Name);
 	DetailCount->SetText(Item ? FText::FromString(FString::Printf(TEXT("보유 수량   %d"), Item->Quantity)) : FText::GetEmpty());
-	DetailDescription->SetText(Item ? Item->Description : FText::FromString(TEXT("아이템을 이곳으로 끌어 놓으세요.")));
+	DetailDescription->SetText(Definition.Description);
 	int32 Occupied = 0;
-	for (int32 ItemIndex = 0; ItemIndex < 10; ++ItemIndex) Occupied += GetItem(ItemIndex) ? 1 : 0;
-	CapacityLabel->SetText(FText::FromString(FString::Printf(TEXT("가방   /   1단계                                      %d / 10칸 사용"), Occupied)));
+	const int32 Unlocked = InventoryComponent ? InventoryComponent->GetUnlockedBagSlotCount() : 0;
+	for (int32 ItemIndex = 0; ItemIndex < Unlocked; ++ItemIndex) Occupied += GetItem(ItemIndex) ? 1 : 0;
+	CapacityLabel->SetText(FText::FromString(FString::Printf(TEXT("가방   /   1단계                                      %d / %d칸 사용"), Occupied, Unlocked)));
+}
+
+void UPSInventoryWidget::RefreshInventory()
+{
+	SelectItem(SelectedIndex);
+	InvalidateLayoutAndVolatility();
 }
 
 void UPSInventoryWidget::CloseInventory()
@@ -229,16 +249,18 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 	}
 	const auto* Item = Inventory->GetItem(Index);
 	if (!Item) return Layer;
-	if (Item->Icon)
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(Item->ItemType);
+	const TObjectPtr<UTexture2D>* IconTexture = Inventory->ItemIcons.Find(Item->ItemType);
+	if (IconTexture && IconTexture->Get())
 	{
-		FSlateBrush Icon;
-		Icon.SetResourceObject(Item->Icon);
-		FSlateDrawElement::MakeBox(Elements, ++Layer, Geometry.ToPaintGeometry(FVector2D(40, 40) * Scale, FSlateLayoutTransform(FVector2D(12, 10) * Scale)), &Icon);
+		FSlateBrush IconBrush;
+		IconBrush.SetResourceObject(IconTexture->Get());
+		FSlateDrawElement::MakeBox(Elements, ++Layer, Geometry.ToPaintGeometry(FVector2D(40, 40) * Scale, FSlateLayoutTransform(FVector2D(12, 10) * Scale)), &IconBrush);
 	}
 	else
 	{
-		const FLinearColor C = Item->Color;
-		switch (Item->PlaceholderIcon)
+		const FLinearColor C = Definition.Color;
+		switch (Definition.PlaceholderIcon)
 		{
 		case 0: Rect(29, 16, 5, 34, Hex(TEXT("735037"))); Rect(17, 14, 29, 8, C); Rect(16, 20, 9, 8, C); break;
 		case 1: Rect(20, 24, 24, 23, Hex(TEXT("E5CE95"))); Rect(24, 20, 16, 5, Hex(TEXT("765A36"))); Rect(30, 28, 4, 13, C); Rect(23, 27, 8, 5, C); Rect(33, 24, 7, 6, C); break;
@@ -272,7 +294,8 @@ void UPSInventorySlotWidget::NativeOnDragDetected(const FGeometry&, const FPoint
 {
 	if (!Inventory || !Inventory->GetItem(Index)) return;
 	auto* Drag = NewObject<UPSInventoryDragOperation>(this);
-	Drag->Inventory = Inventory;
+	Drag->InventoryComponent = Inventory->GetInventoryComponent();
+	Drag->SourceArea = EPSInventoryArea::Bag;
 	Drag->SourceIndex = Index;
 	auto* Visual = NewObject<USizeBox>(Drag);
 	Visual->SetWidthOverride(64);
@@ -289,7 +312,11 @@ void UPSInventorySlotWidget::NativeOnDragDetected(const FGeometry&, const FPoint
 bool UPSInventorySlotWidget::NativeOnDrop(const FGeometry&, const FDragDropEvent&, UDragDropOperation* Operation)
 {
 	auto* Drag = Cast<UPSInventoryDragOperation>(Operation);
-	return Drag && Drag->Inventory == Inventory && Inventory && Inventory->MoveItem(Drag->SourceIndex, Index);
+	if (!Drag || !Inventory || Drag->InventoryComponent != Inventory->GetInventoryComponent()) return false;
+	const bool bMoved = Drag->InventoryComponent->MoveItem(
+		Drag->SourceArea, Drag->SourceIndex, EPSInventoryArea::Bag, Index);
+	if (bMoved) Inventory->SelectItem(Index);
+	return bMoved;
 }
 
 void UPSInventorySlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const FPointerEvent& Event)
@@ -298,7 +325,7 @@ void UPSInventorySlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const
 	if (Inventory)
 	{
 		const auto* Item = Inventory->GetItem(Index);
-		SetToolTipText(Item ? Item->Name : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
+		SetToolTipText(Item ? PSItems::GetDefinition(Item->ItemType).Name : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
 	}
 }
 

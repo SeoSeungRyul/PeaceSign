@@ -3,8 +3,13 @@
 #include "../World/PSGridWorld.h"
 #include "../World/PSWorldSaveGame.h"
 #include "../World/PSTileChunkActor.h"
+#include "../World/PSCropGrowth.h"
+#include "../PSPlayerController.h"
+#include "../Inventory/PSInventoryComponent.h"
+#include "../Time/PSGameTimeSubsystem.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/World.h"
+#include "InputMappingContext.h"
 #include "Kismet/GameplayStatics.h"
 #include "UObject/UnrealType.h"
 
@@ -89,6 +94,87 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	for (auto* Component : Components)
 		TestEqual(TEXT("Rebuilding does not duplicate tiles"), Component->GetInstanceCount(), Component->GetFName() == TEXT("WaterInstances") ? 0 : 1);
 	UGameplayStatics::DeleteGameInSlot(Slot, 0);
+	World->DestroyWorld(false);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPSFarmingInventoryTest, "PeaceSign.Farming.InventoryIntegration",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
+{
+	const UWorld::InitializationValues Init = UWorld::InitializationValues().AllowAudioPlayback(false)
+		.CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
+	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
+	World->InitializeActorsForPlay(FURL());
+	const FString WorldSlot = TEXT("FarmingInventoryWorld_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	APSGridWorld* Grid = World->SpawnActorDeferred<APSGridWorld>(APSGridWorld::StaticClass(), FTransform::Identity);
+	Grid->SaveSlotName = WorldSlot;
+	Grid->FinishSpawning(FTransform::Identity);
+	const FString InventorySlot = TEXT("FarmingInventory_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	APSPlayerController* Controller = World->SpawnActorDeferred<APSPlayerController>(
+		APSPlayerController::StaticClass(), FTransform::Identity);
+	Controller->InventoryComponent->SaveSlotName = InventorySlot;
+	Controller->InventoryComponent->bAutoSave = false;
+	Controller->GridWorld = Grid;
+	Controller->FinishSpawning(FTransform::Identity);
+	Controller->InventoryComponent->ResetToDefaults();
+	TestEqual(TEXT("Controller instance has ten hotbar mappings"), Controller->HotbarMappingContext->GetMappings().Num(), 10);
+	for (const FEnhancedActionKeyMapping& Mapping : Controller->HotbarMappingContext->GetMappings())
+	{
+		TestTrue(TEXT("Instance hotbar mapping references one of its actions"),
+			Controller->HotbarSlotActions.Contains(Mapping.Action));
+	}
+
+	TArray<FIntPoint> Cells;
+	for (int32 Y = -10; Y < 10 && Cells.Num() < 2; ++Y)
+		for (int32 X = -10; X < 10 && Cells.Num() < 2; ++X)
+			if (Grid->GetGroundTile(FIntPoint(X, Y)) == EPSTileType::Grass) Cells.Add(FIntPoint(X, Y));
+	if (!TestEqual(TEXT("Two farm cells are available"), Cells.Num(), 2))
+	{
+		World->DestroyWorld(false);
+		return false;
+	}
+	for (const FIntPoint Cell : Cells) Grid->TillCell(Cell);
+
+	Controller->SelectHotbarSlot(0);
+	TestEqual(TEXT("Slot one equips its hoe"), Controller->GetEquipment(), EPSEquipment::Hoe);
+	TestTrue(TEXT("Moving the selected hoe succeeds"), Controller->InventoryComponent->MoveItem(
+		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Hotbar, 3));
+	TestEqual(TEXT("Empty selected slot becomes bare hands"), Controller->GetEquipment(), EPSEquipment::BareHands);
+	TestTrue(TEXT("Returning the hoe refreshes equipment"), Controller->InventoryComponent->MoveItem(
+		EPSInventoryArea::Hotbar, 3, EPSInventoryArea::Hotbar, 0));
+	TestEqual(TEXT("Returned hoe equips again"), Controller->GetEquipment(), EPSEquipment::Hoe);
+
+	Controller->SelectHotbarSlot(1);
+	TestEqual(TEXT("Slot two equips its seed"), Controller->GetEquipment(), EPSEquipment::Seed);
+	const int32 SeedsBefore = Controller->InventoryComponent->GetHotbarSlot(1).Quantity;
+	TestEqual(TEXT("Selected seed plants"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Planted);
+	TestEqual(TEXT("Successful planting consumes one selected seed"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore - 1);
+	TestEqual(TEXT("Planted tile stores crop data ID"), Grid->GetCropId(Cells[0]), 0);
+	TestEqual(TEXT("Failed repeat planting consumes nothing"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::NoEffect);
+	TestEqual(TEXT("Rejected planting preserves seeds"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore - 1);
+
+	UPSGameTimeSubsystem* Clock = World->GetSubsystem<UPSGameTimeSubsystem>();
+	TestNotNull(TEXT("Growth clock exists"), Clock);
+	Clock->Tick(5760.0f);
+	TestEqual(TEXT("Crop reaches harvest stage"), Grid->GetCropStage(Cells[0]), PSCropGrowth::MaxStage);
+	Controller->SelectHotbarSlot(0);
+	TestEqual(TEXT("Hoe harvest succeeds"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Harvested);
+	TestEqual(TEXT("Harvest adds matching produce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, 0), 1);
+	TestEqual(TEXT("Harvest leaves empty tilled soil"), Grid->GetCropType(Cells[0]), EPSCropType::None);
+
+	Controller->SelectHotbarSlot(1);
+	TestEqual(TEXT("Second seed plants"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::Planted);
+	Clock->Tick(5760.0f);
+	TestTrue(TEXT("Produce stack can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::TestCrop, 998, 0));
+	TestTrue(TEXT("Remaining bag cells can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::Wood, 8991));
+	Controller->SelectHotbarSlot(0);
+	TestEqual(TEXT("Full inventory blocks harvest"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::InventoryFull);
+	TestEqual(TEXT("Blocked harvest keeps mature crop"), Grid->GetCropStage(Cells[1]), PSCropGrowth::MaxStage);
+	TestEqual(TEXT("Blocked harvest does not add produce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, 0), 999);
+
+	UGameplayStatics::DeleteGameInSlot(WorldSlot, 0);
+	UGameplayStatics::DeleteGameInSlot(InventorySlot, 0);
 	World->DestroyWorld(false);
 	return true;
 }
