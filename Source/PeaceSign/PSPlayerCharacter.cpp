@@ -97,6 +97,11 @@ void APSPlayerCharacter::BeginPlay()
 void APSPlayerCharacter::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (bMovementLocked)
+	{
+		StatsComponent->SetMovementActive(false);
+		return;
+	}
 
 	FVector2D MovementInput = CurrentMovementInput;
 	if (!MovementInput.IsNearlyZero())
@@ -252,6 +257,7 @@ void APSPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 void APSPlayerCharacter::Move(const FInputActionValue& Value)
 {
+	if (bMovementLocked) return;
 	const FVector2D MovementInput = Value.Get<FVector2D>();
 	CurrentMovementInput = MovementInput;
 	if (MovementInput.IsNearlyZero())
@@ -270,6 +276,7 @@ void APSPlayerCharacter::StopMoving()
 
 void APSPlayerCharacter::StartRun()
 {
+	if (bMovementLocked) return;
 	bWantsToRun = true;
 }
 
@@ -280,10 +287,23 @@ void APSPlayerCharacter::StopRun()
 
 void APSPlayerCharacter::Roll()
 {
+	if (bMovementLocked) return;
 	if (!bIsRolling)
 	{
 		StartRoll(CurrentMovementInput);
 	}
+}
+
+void APSPlayerCharacter::SetMovementLocked(const bool bLocked)
+{
+	bMovementLocked = bLocked;
+	if (!bLocked) return;
+	CurrentMovementInput = FVector2D::ZeroVector;
+	bWantsToRun = false;
+	bIsRolling = false;
+	RollTimeRemaining = 0.0f;
+	StatsComponent->SetMovementActive(false);
+	StatsComponent->SetActionActive(false);
 }
 
 void APSPlayerCharacter::SetFacingFromInput(const FVector2D& MovementInput)

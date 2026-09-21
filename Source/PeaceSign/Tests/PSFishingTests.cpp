@@ -3,10 +3,17 @@
 #include "../World/PSGridWorld.h"
 #include "../World/PSTileChunkActor.h"
 #include "../PSPlayerController.h"
+#include "../PSPlayerCharacter.h"
 #include "../Inventory/PSInventoryComponent.h"
+#include "../Inventory/PSWorldItemActor.h"
+#include "../UI/PSFishingWidget.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Components/Image.h"
+#include "Components/TextBlock.h"
 #include "EnhancedInputComponent.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
+#include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -15,6 +22,8 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 {
 	const UWorld::InitializationValues Init = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	WorldContext.SetCurrentWorld(World);
 	APSGridWorld* Grid = World->SpawnActor<APSGridWorld>();
 	Grid->SaveSlotName = TEXT("FishingTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	FIntPoint Water = FIntPoint::ZeroValue;
@@ -54,7 +63,12 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 			Shore = Water - FIntPoint(1, 0);
 			bFoundShore = Grid->CanFishFrom(Shore, Water);
 		}
-	if (!TestTrue(TEXT("A shoreline exists"), bFoundShore)) { World->DestroyWorld(false); return false; }
+	if (!TestTrue(TEXT("A shoreline exists"), bFoundShore))
+	{
+		GEngine->DestroyWorldContext(World);
+		World->DestroyWorld(false);
+		return false;
+	}
 	TestFalse(TEXT("Cannot fish while standing in water"), Grid->CanFishFrom(Water, Water + FIntPoint(1, 0)));
 	TestTrue(TEXT("Can cast from two cells away"), Grid->CanFishFrom(Shore - FIntPoint(1, 0), Water));
 	TestFalse(TEXT("Cannot cast from three cells away"), Grid->CanFishFrom(Shore - FIntPoint(2, 0), Water));
@@ -85,27 +99,88 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->SelectHotbarSlot(2);
 	TestEqual(TEXT("Third hotbar slot equips rod"), Controller->GetEquipment(), EPSEquipment::FishingRod);
 	TestTrue(TEXT("Equipped rod works on adjacent water"), Controller->TryUseFishingRod(Water));
-	for (int32 Frame = 0; Frame < 180; ++Frame) Controller->UpdateFishing();
-	TestTrue(TEXT("One click keeps fishing active across frames"), Controller->IsFishing());
+	TestEqual(TEXT("Cast enters bite-wait state"), Controller->GetFishingState(), EPSFishingState::WaitingForBite);
+	for (int32 Frame = 0; Frame < 180; ++Frame) Controller->UpdateFishing(0.0f);
+	TestTrue(TEXT("Fishing stays active without elapsed time"), Controller->IsFishing());
 	TestFalse(TEXT("Repeated cast does not restart fishing"), Controller->TryUseFishingRod(Water));
 	TestFalse(TEXT("Cannot retarget an active cast"), Controller->TryUseFishingRod(Shore));
 	TestTrue(TEXT("Invalid target does not cancel active fishing"), Controller->IsFishing());
 	TestEqual(TEXT("Original fishing target is retained"), Controller->FishingCell.GetValue(), Water);
+	Controller->HandleFishingRod();
+	TestFalse(TEXT("Use input cancels while waiting for a bite"), Controller->IsFishing());
+	TestTrue(TEXT("Can cast again after cancellation"), Controller->TryUseFishingRod(Water));
+	Controller->FishingStateTimeRemaining = 0.01f;
+	Controller->UpdateFishing(0.02f);
+	TestEqual(TEXT("Bite delay enters the five-second bite window"), Controller->GetFishingState(), EPSFishingState::BiteWindow);
+	TestEqual(TEXT("Bite window duration follows the design"), Controller->FishingStateDuration, 5.0f);
+	Controller->HandleFishingRod();
+	TestEqual(TEXT("Fresh use input starts the minigame"), Controller->GetFishingState(), EPSFishingState::Minigame);
+	const FIntPoint InputRange = PSFishing::GetInputCountRange(Controller->CurrentFish.Difficulty);
+	TestTrue(TEXT("Difficulty controls sequence length"), Controller->FishingSequence.Num() >= InputRange.X && Controller->FishingSequence.Num() <= InputRange.Y);
+	const EPSFishingDirection Correct = Controller->FishingSequence[0];
+	const EPSFishingDirection Wrong = static_cast<EPSFishingDirection>((static_cast<int32>(Correct) + 1) % 4);
+	TestFalse(TEXT("Wrong direction has no penalty or progress"), Controller->SubmitFishingDirection(Wrong));
+	TestEqual(TEXT("Wrong direction retains current answer"), Controller->FishingSequenceIndex, 0);
+	const TArray<EPSFishingDirection> Answers = Controller->FishingSequence;
+	for (const EPSFishingDirection Answer : Answers) TestTrue(TEXT("Correct direction advances"), Controller->SubmitFishingDirection(Answer));
+	TestEqual(TEXT("Completing all directions succeeds"), Controller->GetFishingState(), EPSFishingState::Success);
+	TestEqual(TEXT("Success immediately awards one fish"), Controller->InventoryComponent->CountItem(EPSItemType::Fish), 1);
+	Controller->UpdateFishing(2.0f);
+	TestFalse(TEXT("Result closes after its display time"), Controller->IsFishing());
+
+	TestTrue(TEXT("Can start another cast"), Controller->TryUseFishingRod(Water));
 	Pawn->SetActorLocation(Grid->CellToWorldCenter(Shore) + FVector(1, 0, 0));
-	Controller->UpdateFishing();
-	TestFalse(TEXT("Movement within the same cell stops fishing"), Controller->IsFishing());
+	Controller->UpdateFishing(0.0f);
+	TestFalse(TEXT("External movement cancels the fixed fishing position"), Controller->IsFishing());
 	Pawn->SetActorLocation(Grid->CellToWorldCenter(Shore - FIntPoint(1, 0)));
 	TestTrue(TEXT("Controller permits two-cell cast"), Controller->TryUseFishingRod(Water));
 	Controller->SelectHotbarSlot(0);
-	TestFalse(TEXT("Changing equipment stops fishing"), Controller->IsFishing());
-	Controller->SelectHotbarSlot(2);
-	TestTrue(TEXT("Can start again after equipment change"), Controller->TryUseFishingRod(Water));
+	TestEqual(TEXT("Hotbar changes are blocked during fishing"), Controller->GetEquipment(), EPSEquipment::FishingRod);
+	TestTrue(TEXT("Blocked hotbar change leaves fishing active"), Controller->IsFishing());
+	Controller->StopFishing();
+	TestTrue(TEXT("Can cast after explicit cancellation"), Controller->TryUseFishingRod(Water));
 	Controller->UnPossess();
-	Controller->UpdateFishing();
+	Controller->UpdateFishing(0.0f);
 	TestFalse(TEXT("Losing pawn stops fishing"), Controller->IsFishing());
 	Controller->Possess(Pawn);
 	Pawn->SetActorLocation(Grid->CellToWorldCenter(Shore - FIntPoint(2, 0)));
 	TestFalse(TEXT("Controller rejects three-cell casts"), Controller->TryUseFishingRod(Water));
+	APSPlayerCharacter* Character = World->SpawnActor<APSPlayerCharacter>();
+	Controller->Possess(Character);
+	Character->SetActorLocation(Grid->CellToWorldCenter(Shore));
+	TestTrue(TEXT("Character can begin fishing"), Controller->TryUseFishingRod(Water));
+	TestTrue(TEXT("Fishing locks character movement"), Character->IsMovementLocked());
+	Controller->BeginFishingBite();
+	Controller->BeginFishingMinigame();
+	Controller->FishingSequence = {EPSFishingDirection::Up};
+	Controller->FishingSequenceIndex = 0;
+	Controller->SubmitFishingDirection(EPSFishingDirection::Up);
+	TestTrue(TEXT("Success keeps movement locked during result motion"), Character->IsMovementLocked());
+	Controller->UpdateFishing(2.0f);
+	TestFalse(TEXT("Success result completion unlocks movement"), Character->IsMovementLocked());
+	TestTrue(TEXT("Character can cast after success"), Controller->TryUseFishingRod(Water));
+	Controller->BeginFishingBite();
+	Controller->CompleteFishing(false);
+	TestFalse(TEXT("Failure unlocks movement immediately"), Character->IsMovementLocked());
+	Controller->UpdateFishing(2.0f);
+
+	const int32 ExistingFish = Controller->InventoryComponent->CountItem(EPSItemType::Fish);
+	TestTrue(TEXT("Fish stack can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::Fish, 999 - ExistingFish));
+	for (int32 Variant = 0; Variant < 9; ++Variant)
+		TestTrue(TEXT("Remaining bag slots can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::TestSeed, 999, Variant));
+	int32 DropsBefore = 0;
+	for (TActorIterator<APSWorldItemActor> It(World); It; ++It) ++DropsBefore;
+	TestTrue(TEXT("Can cast with a full bag"), Controller->TryUseFishingRod(Water));
+	Controller->BeginFishingBite();
+	Controller->BeginFishingMinigame();
+	Controller->FishingSequence = {EPSFishingDirection::Right};
+	Controller->FishingSequenceIndex = 0;
+	Controller->SubmitFishingDirection(EPSFishingDirection::Right);
+	int32 DropsAfter = 0;
+	for (TActorIterator<APSWorldItemActor> It(World); It; ++It) ++DropsAfter;
+	TestEqual(TEXT("Full inventory drops the fishing reward"), DropsAfter, DropsBefore + 1);
+	TestEqual(TEXT("Failed inventory insert does not exceed the stack limit"), Controller->InventoryComponent->CountItem(EPSItemType::Fish), 999);
+	Controller->UpdateFishing(2.0f);
 
 	// An odd chunk size forces lakes across chunk boundaries. Saving and unloading
 	// one side must not change their shape or the fishing range check.
@@ -137,7 +212,26 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	for (auto* Component : Components)
 		if (Component->GetFName() == TEXT("WaterInstances")) RenderedWater += Component->GetInstanceCount();
 	TestEqual(TEXT("2x2 water renders without duplicate instances"), RenderedWater, 4);
+	UPSFishingWidget* FishingUI = CreateWidget<UPSFishingWidget>(World);
+	TestNotNull(TEXT("Fishing UI creates"), FishingUI);
+	if (FishingUI)
+	{
+		// Force the Slate tree to initialize, as AddToViewport does in normal play.
+		FishingUI->TakeWidget();
+		FishingUI->Refresh(EPSFishingState::Minigame, 8.0f, 10.0f,
+			{EPSFishingDirection::Up, EPSFishingDirection::Left, EPSFishingDirection::Down}, 0,
+			FText::FromString(TEXT("붕어")), 18);
+		TestEqual(TEXT("Active fishing UI is visible"), FishingUI->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		TestEqual(TEXT("Fishing UI has six direction slots"), FishingUI->DirectionLabels.Num(), 6);
+		TestNotNull(TEXT("Fishing arrow atlas is loaded"), FishingUI->DirectionAtlas.Get());
+		TestEqual(TEXT("Current fishing arrow image is shown in slot three"), FishingUI->DirectionImages[2]->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		TestNotNull(TEXT("Current arrow uses the atlas texture"), FishingUI->DirectionImages[2]->GetBrush().GetResourceObject());
+		FishingUI->Refresh(EPSFishingState::Idle, 0, 0, {}, 0, FText::GetEmpty(), 0);
+		TestEqual(TEXT("Idle fishing UI is hidden"), FishingUI->GetVisibility(), ESlateVisibility::Collapsed);
+	}
+	World->DestroyActor(Renderer);
 	UGameplayStatics::DeleteGameInSlot(Grid->SaveSlotName, 0);
+	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
 	return true;
 }

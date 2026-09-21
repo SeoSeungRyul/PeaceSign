@@ -6,7 +6,10 @@
 #include "UI/PSGameTimeWidget.h"
 #include "UI/PSInventoryWidget.h"
 #include "UI/PSHotbarWidget.h"
+#include "UI/PSFishingWidget.h"
 #include "Inventory/PSInventoryComponent.h"
+#include "Inventory/PSWorldItemActor.h"
+#include "PSPlayerCharacter.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Time/PSGameTimeSubsystem.h"
 
@@ -16,6 +19,7 @@
 #include "EngineUtils.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "Engine/DataTable.h"
 #include "GameFramework/Pawn.h"
 #include "InputAction.h"
 #include "InputCoreTypes.h"
@@ -26,6 +30,26 @@
 
 namespace
 {
+	TArray<FPSFishDefinition> GetFallbackFish()
+	{
+		TArray<FPSFishDefinition> Result;
+		const auto Add = [&Result](const TCHAR* Name, const int32 Difficulty, const int32 MinSize,
+			const int32 MaxSize, const float Weight)
+		{
+			FPSFishDefinition& Fish = Result.AddDefaulted_GetRef();
+			Fish.DisplayName = FText::FromString(Name);
+			Fish.Difficulty = Difficulty;
+			Fish.MinSizeCm = MinSize;
+			Fish.MaxSizeCm = MaxSize;
+			Fish.Weight = Weight;
+		};
+		Add(TEXT("붕어"), 1, 8, 28, 50.0f);
+		Add(TEXT("잉어"), 2, 25, 70, 30.0f);
+		Add(TEXT("메기"), 3, 45, 110, 15.0f);
+		Add(TEXT("황금 잉어"), 4, 35, 90, 5.0f);
+		return Result;
+	}
+
 	FColor GetTileDebugColor(const EPSTileType TileType)
 	{
 		switch (TileType)
@@ -134,6 +158,9 @@ void APSPlayerController::BeginPlay()
 			HotbarWidget->SetInventoryComponent(InventoryComponent);
 			HotbarWidget->AddToViewport(300);
 		}
+		UClass* FishingClass = FishingWidgetClass.Get();
+		FishingWidget = CreateWidget<UPSFishingWidget>(this, FishingClass ? FishingClass : UPSFishingWidget::StaticClass());
+		if (FishingWidget) FishingWidget->AddToViewport(350);
 	}
 
 	bShowMouseCursor = true;
@@ -241,12 +268,16 @@ void APSPlayerController::SetupInputComponent()
 	// R is a development-only world reset shortcut and is intentionally not part of the gameplay IA set.
 	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &APSPlayerController::HandleResetWorld);
 	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &APSPlayerController::HandleAdvanceTime);
+	InputComponent->BindKey(EKeys::W, IE_Pressed, this, &APSPlayerController::HandleFishingUp);
+	InputComponent->BindKey(EKeys::A, IE_Pressed, this, &APSPlayerController::HandleFishingLeft);
+	InputComponent->BindKey(EKeys::S, IE_Pressed, this, &APSPlayerController::HandleFishingDown);
+	InputComponent->BindKey(EKeys::D, IE_Pressed, this, &APSPlayerController::HandleFishingRight);
 }
 
 void APSPlayerController::PlayerTick(const float DeltaTime)
 {
 	Super::PlayerTick(DeltaTime);
-	UpdateFishing();
+	UpdateFishing(DeltaTime);
 	UpdateStatusWidget();
 	if (bInventoryOpen) return;
 	HoveredCell = GetCursorCell();
@@ -399,6 +430,7 @@ void APSPlayerController::HandleHotbarSlot(const FInputActionValue& Value, const
 
 void APSPlayerController::SelectHotbarSlot(const int32 SlotIndex)
 {
+	if (AreFishingControlsLocked()) return;
 	if (!InventoryComponent || !InventoryComponent->IsHotbarSlot(SlotIndex)) return;
 	InventoryComponent->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshEquipmentFromHotbar);
 	SelectedHotbarSlot = SlotIndex;
@@ -424,7 +456,16 @@ void APSPlayerController::RefreshEquipmentFromHotbar()
 
 void APSPlayerController::HandleFishingRod()
 {
-	// A second click does not restart or move an active cast.
+	if (FishingState == EPSFishingState::WaitingForBite)
+	{
+		StopFishing(true);
+		return;
+	}
+	if (FishingState == EPSFishingState::BiteWindow)
+	{
+		BeginFishingMinigame();
+		return;
+	}
 	if (IsFishing()) return;
 	const TOptional<FIntPoint> Target = GetCursorCell();
 	if (!Target.IsSet() || !TryUseFishingRod(Target.GetValue()))
@@ -436,7 +477,7 @@ void APSPlayerController::HandleFishingRod()
 
 bool APSPlayerController::TryUseFishingRod(const FIntPoint WaterCell)
 {
-	UpdateFishing();
+	UpdateFishing(0.0f);
 	if (IsFishing()) return false;
 	const APawn* PlayerPawn = GetPawn();
 	if (Equipment != EPSEquipment::FishingRod || !IsValid(GridWorld) || !PlayerPawn
@@ -445,35 +486,205 @@ bool APSPlayerController::TryUseFishingRod(const FIntPoint WaterCell)
 	FishingCell = WaterCell;
 	FishingPawn = GetPawn();
 	FishingStartLocation = PlayerPawn->GetActorLocation();
+	CurrentFish = SelectFishDefinition();
+	CurrentFishSizeCm = 0;
+	FishingSequence.Reset();
+	FishingSequenceIndex = 0;
+	FishingState = EPSFishingState::WaitingForBite;
+	FishingStateDuration = FMath::FRandRange(FMath::Min(MinBiteDelay, MaxBiteDelay), FMath::Max(MinBiteDelay, MaxBiteDelay));
+	FishingStateTimeRemaining = FishingStateDuration;
+	SetFishingMovementLocked(true);
 	if (GEngine) GEngine->AddOnScreenDebugMessage(4, 2.0f, FColor::Cyan, TEXT("Fishing rod cast"));
 	OnFishingRodUsed(WaterCell);
+	RefreshFishingWidget();
 	return true;
 }
 
-void APSPlayerController::UpdateFishing()
+void APSPlayerController::UpdateFishing(const float DeltaSeconds)
 {
 	if (!IsFishing()) return;
 	const APawn* PlayerPawn = GetPawn();
-	if (!PlayerPawn || FishingPawn.Get() != PlayerPawn || !IsValid(GridWorld)
+	const bool bActiveCast = FishingState == EPSFishingState::WaitingForBite
+		|| FishingState == EPSFishingState::BiteWindow || FishingState == EPSFishingState::Minigame;
+	if (bActiveCast && (!PlayerPawn || FishingPawn.Get() != PlayerPawn || !IsValid(GridWorld)
 		|| Equipment != EPSEquipment::FishingRod
 		|| !PlayerPawn->GetActorLocation().Equals(FishingStartLocation, 0.01f)
-		|| !PlayerPawn->GetVelocity().IsNearlyZero()
-		|| !GridWorld->CanFishFrom(GridWorld->WorldToCell(PlayerPawn->GetActorLocation()), FishingCell.GetValue()))
+		|| !GridWorld->CanFishFrom(GridWorld->WorldToCell(PlayerPawn->GetActorLocation()), FishingCell.GetValue())))
 	{
-		StopFishing();
+		StopFishing(false);
 		return;
 	}
-	const FVector Target = GridWorld->CellToWorldCenter(FishingCell.GetValue()) + FVector(0, 0, 8);
-	// Draw for this frame only: stopping clears the visual without flushing other debug shapes.
-	DrawDebugLine(GetWorld(), PlayerPawn->GetActorLocation() + FVector(0, 0, 12), Target,
-		FColor::White, false, 0.0f, 0, 2.0f);
-	DrawDebugSphere(GetWorld(), Target, 8.0f, 12, FColor::Red, false, 0.0f);
+	if (bActiveCast)
+	{
+		const FVector Target = GridWorld->CellToWorldCenter(FishingCell.GetValue()) + FVector(0, 0, 8);
+		// Draw for this frame only: stopping clears the visual without flushing other debug shapes.
+		DrawDebugLine(GetWorld(), PlayerPawn->GetActorLocation() + FVector(0, 0, 12), Target,
+			FColor::White, false, 0.0f, 0, 2.0f);
+		DrawDebugSphere(GetWorld(), Target, 8.0f, 12, FColor::Red, false, 0.0f);
+	}
+
+	if (DeltaSeconds > 0.0f)
+	{
+		FishingStateTimeRemaining = FMath::Max(0.0f, FishingStateTimeRemaining - DeltaSeconds);
+		if (FishingStateTimeRemaining <= 0.0f)
+		{
+			switch (FishingState)
+			{
+			case EPSFishingState::WaitingForBite: BeginFishingBite(); break;
+			case EPSFishingState::BiteWindow:
+			case EPSFishingState::Minigame: CompleteFishing(false); break;
+			case EPSFishingState::Success:
+			case EPSFishingState::Failure: StopFishing(false); break;
+			default: break;
+			}
+		}
+	}
+	RefreshFishingWidget();
 }
 
-void APSPlayerController::StopFishing()
+void APSPlayerController::BeginFishingBite()
 {
+	if (FishingState != EPSFishingState::WaitingForBite) return;
+	FishingState = EPSFishingState::BiteWindow;
+	FishingStateDuration = BiteWindowDuration;
+	FishingStateTimeRemaining = FishingStateDuration;
+	if (GEngine) GEngine->AddOnScreenDebugMessage(4, 2.0f, FColor::Yellow, TEXT("! Bite ! Press F or Right Mouse"));
+	OnFishingBite();
+}
+
+void APSPlayerController::BeginFishingMinigame()
+{
+	if (FishingState != EPSFishingState::BiteWindow) return;
+	FishingState = EPSFishingState::Minigame;
+	FishingStateDuration = MinigameDuration;
+	FishingStateTimeRemaining = FishingStateDuration;
+	GenerateFishingSequence();
+	OnFishingMinigameStarted();
+}
+
+void APSPlayerController::GenerateFishingSequence()
+{
+	FishingSequence.Reset();
+	FishingSequenceIndex = 0;
+	const FIntPoint Range = PSFishing::GetInputCountRange(CurrentFish.Difficulty);
+	const int32 Count = FMath::RandRange(Range.X, Range.Y);
+	FishingSequence.Reserve(Count);
+	for (int32 Index = 0; Index < Count; ++Index)
+		FishingSequence.Add(static_cast<EPSFishingDirection>(FMath::RandRange(0, 3)));
+}
+
+bool APSPlayerController::SubmitFishingDirection(const EPSFishingDirection Direction)
+{
+	if (FishingState != EPSFishingState::Minigame || !FishingSequence.IsValidIndex(FishingSequenceIndex)) return false;
+	if (FishingSequence[FishingSequenceIndex] != Direction) return false;
+	++FishingSequenceIndex;
+	if (FishingSequenceIndex >= FishingSequence.Num()) CompleteFishing(true);
+	else RefreshFishingWidget();
+	return true;
+}
+
+void APSPlayerController::HandleFishingUp() { SubmitFishingDirection(EPSFishingDirection::Up); }
+void APSPlayerController::HandleFishingLeft() { SubmitFishingDirection(EPSFishingDirection::Left); }
+void APSPlayerController::HandleFishingDown() { SubmitFishingDirection(EPSFishingDirection::Down); }
+void APSPlayerController::HandleFishingRight() { SubmitFishingDirection(EPSFishingDirection::Right); }
+
+FPSFishDefinition APSPlayerController::SelectFishDefinition() const
+{
+	TArray<FPSFishDefinition> Fish;
+	if (FishDataTable)
+	{
+		TArray<FPSFishDefinition*> Rows;
+		FishDataTable->GetAllRows(TEXT("Fishing"), Rows);
+		for (const FPSFishDefinition* Row : Rows) if (Row) Fish.Add(*Row);
+	}
+	if (Fish.IsEmpty()) Fish = GetFallbackFish();
+	float TotalWeight = 0.0f;
+	for (const FPSFishDefinition& Entry : Fish) TotalWeight += FMath::Max(0.0f, Entry.Weight);
+	if (TotalWeight <= 0.0f) return Fish[0];
+	float Roll = FMath::FRandRange(0.0f, TotalWeight);
+	for (const FPSFishDefinition& Entry : Fish)
+	{
+		Roll -= FMath::Max(0.0f, Entry.Weight);
+		if (Roll <= 0.0f) return Entry;
+	}
+	return Fish.Last();
+}
+
+void APSPlayerController::CompleteFishing(const bool bSuccess)
+{
+	if (FishingState != EPSFishingState::BiteWindow && FishingState != EPSFishingState::Minigame) return;
+	if (bSuccess)
+	{
+		CurrentFishSizeCm = FMath::RandRange(FMath::Min(CurrentFish.MinSizeCm, CurrentFish.MaxSizeCm),
+			FMath::Max(CurrentFish.MinSizeCm, CurrentFish.MaxSizeCm));
+		if (!InventoryComponent || !InventoryComponent->AddItem(EPSItemType::Fish, 1)) DropFishingReward();
+		FishingState = EPSFishingState::Success;
+		FishingStateDuration = 1.5f;
+		OnFishingSucceeded(CurrentFish.DisplayName, CurrentFishSizeCm);
+	}
+	else
+	{
+		FishingState = EPSFishingState::Failure;
+		FishingStateDuration = 1.0f;
+		OnFishingFailed();
+	}
+	FishingStateTimeRemaining = FishingStateDuration;
+	// Success retains the lock through its motion; failure restores control immediately.
+	if (!bSuccess) SetFishingMovementLocked(false);
+	RefreshFishingWidget();
+}
+
+void APSPlayerController::DropFishingReward()
+{
+	if (!GetWorld() || !GetPawn()) return;
+	const FTransform SpawnTransform(FRotator::ZeroRotator, GetPawn()->GetActorLocation() + FVector(45, 0, 20));
+	APSWorldItemActor* Drop = GetWorld()->SpawnActorDeferred<APSWorldItemActor>(
+		APSWorldItemActor::StaticClass(), SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (Drop)
+	{
+		FPSItemStack Stack;
+		Stack.ItemType = EPSItemType::Fish;
+		Stack.Quantity = 1;
+		Drop->InitializeItem(Stack);
+		Drop->FinishSpawning(SpawnTransform);
+	}
+}
+
+void APSPlayerController::SetFishingMovementLocked(const bool bLocked)
+{
+	APawn* PawnToUpdate = FishingPawn.Get();
+	if (!PawnToUpdate) PawnToUpdate = GetPawn();
+	if (APSPlayerCharacter* PlayerCharacter = Cast<APSPlayerCharacter>(PawnToUpdate)) PlayerCharacter->SetMovementLocked(bLocked);
+}
+
+bool APSPlayerController::AreFishingControlsLocked() const
+{
+	return FishingState == EPSFishingState::WaitingForBite || FishingState == EPSFishingState::BiteWindow
+		|| FishingState == EPSFishingState::Minigame || FishingState == EPSFishingState::Success;
+}
+
+void APSPlayerController::RefreshFishingWidget()
+{
+	if (!FishingWidget) return;
+	float Opacity = 1.0f;
+	if (FishingState == EPSFishingState::Success && FishingStateTimeRemaining < 0.5f) Opacity = FishingStateTimeRemaining / 0.5f;
+	FishingWidget->Refresh(FishingState, FishingStateTimeRemaining, FishingStateDuration,
+		FishingSequence, FishingSequenceIndex, CurrentFish.DisplayName, CurrentFishSizeCm, Opacity);
+}
+
+void APSPlayerController::StopFishing(const bool bCancelled)
+{
+	const bool bWasFishing = IsFishing();
+	SetFishingMovementLocked(false);
 	FishingCell.Reset();
 	FishingPawn.Reset();
+	FishingSequence.Reset();
+	FishingSequenceIndex = 0;
+	FishingState = EPSFishingState::Idle;
+	FishingStateDuration = 0.0f;
+	FishingStateTimeRemaining = 0.0f;
+	if (bWasFishing && bCancelled) OnFishingCancelled();
+	RefreshFishingWidget();
 }
 
 void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
@@ -486,6 +697,7 @@ void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
 
 void APSPlayerController::HandleInventory()
 {
+	if (AreFishingControlsLocked()) return;
 	if (bInventoryOpen)
 	{
 		CloseInventory();
@@ -529,18 +741,21 @@ void APSPlayerController::CloseInventory()
 
 void APSPlayerController::HandleQuest()
 {
+	if (AreFishingControlsLocked()) return;
 	UE_LOG(LogTemp, Log, TEXT("Quest requested"));
 	OnQuestRequested();
 }
 
 void APSPlayerController::HandleAbility()
 {
+	if (AreFishingControlsLocked()) return;
 	UE_LOG(LogTemp, Log, TEXT("Ability requested"));
 	OnAbilityRequested();
 }
 
 void APSPlayerController::HandleCraft()
 {
+	if (AreFishingControlsLocked()) return;
 	UE_LOG(LogTemp, Log, TEXT("Craft requested"));
 	OnCraftRequested();
 }
@@ -619,6 +834,11 @@ void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		HotbarWidget = nullptr;
 	}
 	StopFishing();
+	if (FishingWidget)
+	{
+		FishingWidget->RemoveFromParent();
+		FishingWidget = nullptr;
+	}
 	if (TimeWidget)
 	{
 		TimeWidget->RemoveFromParent();
