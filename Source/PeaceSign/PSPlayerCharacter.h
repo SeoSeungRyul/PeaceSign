@@ -24,6 +24,8 @@ public:
 	APSPlayerCharacter();
 	virtual void Tick(float DeltaSeconds) override;
 	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
+	UFUNCTION(BlueprintCallable, Category="Movement") void SetMovementLocked(bool bLocked);
+	UFUNCTION(BlueprintPure, Category="Movement") bool IsMovementLocked() const { return bMovementLocked; }
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stats")
 	TObjectPtr<UPSPlayerStatsComponent> StatsComponent;
 
@@ -114,6 +116,7 @@ private:
 	TObjectPtr<UPaperFlipbook> RightIdle;
 
 	bool bWantsToRun = false;
+	bool bMovementLocked = false;
 	bool bIsRolling = false;
 	float RollTimeRemaining = 0.0f;
 	FVector2D CurrentMovementInput = FVector2D::ZeroVector;

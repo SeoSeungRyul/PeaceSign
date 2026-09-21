@@ -5,12 +5,15 @@
 #include "../PSPlayerCharacter.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPSWaterCollisionTest, "PeaceSign.Fishing.WaterCollision", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FPSWaterCollisionTest::RunTest(const FString& Parameters)
 {
 	const UWorld::InitializationValues Init = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(true).CreateNavigation(false).CreateAISystem(false);
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
+	FWorldContext& WorldContext = GEngine->CreateNewWorldContext(EWorldType::Game);
+	WorldContext.SetCurrentWorld(World);
 	const FVector Origin(-800, 600, 0);
 	APSTileChunkActor* Chunk = World->SpawnActor<APSTileChunkActor>(Origin, FRotator::ZeroRotator);
 	FPSChunkData Data;
@@ -20,7 +23,12 @@ bool FPSWaterCollisionTest::RunTest(const FString& Parameters)
 		for (int32 X = 1; X <= 2; ++X) Data.Cells[Y * 4 + X].GroundType = EPSTileType::Water;
 	Chunk->Rebuild(Data, 4, 100);
 	APSPlayerCharacter* Player = World->SpawnActor<APSPlayerCharacter>(Origin + FVector(-100, 200, 50), FRotator::ZeroRotator);
-	if (!TestNotNull(TEXT("Character spawned"), Player)) { World->DestroyWorld(false); return false; }
+	if (!TestNotNull(TEXT("Character spawned"), Player))
+	{
+		GEngine->DestroyWorldContext(World);
+		World->DestroyWorld(false);
+		return false;
+	}
 	const auto Sweep = [&](const FVector& Start, const FVector& Delta)
 	{
 		Player->SetActorLocation(Origin + Start, false, nullptr, ETeleportType::TeleportPhysics);
@@ -45,6 +53,7 @@ bool FPSWaterCollisionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Regenerated water blocks again"), Sweep(FVector(-100, 150, 50), FVector(600, 0, 0)));
 	Chunk->Destroy();
 	TestFalse(TEXT("Unloaded chunk leaves no collision"), Sweep(FVector(-100, 150, 50), FVector(600, 0, 0)));
+	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
 	return true;
 }
