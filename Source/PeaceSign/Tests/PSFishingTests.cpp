@@ -6,6 +6,7 @@
 #include "../PSPlayerCharacter.h"
 #include "../Inventory/PSInventoryComponent.h"
 #include "../Inventory/PSWorldItemActor.h"
+#include "../Skills/PSPlayerSkillComponent.h"
 #include "../UI/PSFishingWidget.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/Image.h"
@@ -13,6 +14,7 @@
 #include "EnhancedInputComponent.h"
 #include "Engine/World.h"
 #include "Engine/Engine.h"
+#include "Engine/DataTable.h"
 #include "EngineUtils.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
@@ -81,12 +83,40 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Water cannot be tilled"), Grid->TillCell(Water), EPSTileInteractionResult::NoEffect);
 	TestEqual(TEXT("Water cannot be planted"), Grid->PlantSeed(Water), EPSTileInteractionResult::NoEffect);
 
+	UDataTable* ImportedFishData = NewObject<UDataTable>(World);
+	ImportedFishData->RowStruct = FPSFishDefinition::StaticStruct();
+	const FString FishCsv = TEXT("---,Name,Difficulty,Season,Location,MinSize,MaxSize,Description,DescriptionPlus,IconID\n")
+		TEXT("010201,붕어,1,0,\"(1,2)\",10,40,기본 설명,최대 크기 설명,070201\n");
+	const TArray<FString> FishImportProblems = ImportedFishData->CreateTableFromCSVString(FishCsv);
+	TestTrue(TEXT("Fishing CSV imports without schema errors"), FishImportProblems.IsEmpty());
+	const FPSFishDefinition* ImportedFish = ImportedFishData->FindRow<FPSFishDefinition>(TEXT("010201"), TEXT("Test"));
+	TestNotNull(TEXT("Imported fishing row is addressable by ID"), ImportedFish);
+	if (ImportedFish)
+	{
+		TestEqual(TEXT("CSV imports the fish name"), ImportedFish->Name.ToString(), FString(TEXT("붕어")));
+		TestEqual(TEXT("CSV imports both fishing locations"), ImportedFish->Location.Num(), 2);
+		TestEqual(TEXT("CSV imports the icon relationship"), ImportedFish->IconID, FName(TEXT("070201")));
+	}
+	UDataTable* ImportedIconData = NewObject<UDataTable>(World);
+	ImportedIconData->RowStruct = FPSIconDefinition::StaticStruct();
+	const TArray<FString> IconImportProblems = ImportedIconData->CreateTableFromCSVString(
+		TEXT("---,Name,Image\n070201,더미물고기,Texture2D'/Game/UI/Fishing/T_FishingUIAtlas.T_FishingUIAtlas'\n"));
+	TestTrue(TEXT("Icon CSV imports without schema errors"), IconImportProblems.IsEmpty());
+	const FPSIconDefinition* ImportedIcon = ImportedIconData->FindRow<FPSIconDefinition>(TEXT("070201"), TEXT("Test"));
+	TestNotNull(TEXT("Imported icon row is addressable by IconID"), ImportedIcon);
+	if (ImportedIcon) TestNotNull(TEXT("Imported soft texture path resolves"), ImportedIcon->Image.LoadSynchronous());
+
 	APSPlayerController* Controller = World->SpawnActorDeferred<APSPlayerController>(
 		APSPlayerController::StaticClass(), FTransform::Identity);
 	Controller->InventoryComponent->SaveSlotName = TEXT("FishingInventoryTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	Controller->InventoryComponent->bAutoSave = false;
+	Controller->FishDataTable = ImportedFishData;
+	Controller->FishIconDataTable = ImportedIconData;
+	Controller->SkillComponent->SaveSlotName = TEXT("FishingSkillTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	Controller->SkillComponent->bAutoSave = false;
 	Controller->FinishSpawning(FTransform::Identity);
 	Controller->InventoryComponent->ResetToDefaults();
+	Controller->SkillComponent->ResetSkills();
 	TestEqual(TEXT("Starter fishing rod occupies hotbar slot three"), Controller->InventoryComponent->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
 	APawn* Pawn = World->SpawnActor<APawn>();
 	USceneComponent* Root = NewObject<USceneComponent>(Pawn);
@@ -99,6 +129,8 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->SelectHotbarSlot(2);
 	TestEqual(TEXT("Third hotbar slot equips rod"), Controller->GetEquipment(), EPSEquipment::FishingRod);
 	TestTrue(TEXT("Equipped rod works on adjacent water"), Controller->TryUseFishingRod(Water));
+	TestEqual(TEXT("Selected fish preserves its CSV row ID"), Controller->GetCurrentFishId(), FName(TEXT("010201")));
+	TestNotNull(TEXT("Selected fish resolves its related icon row"), Controller->ResolveFishIcon(Controller->CurrentFish.IconID));
 	TestEqual(TEXT("Cast enters bite-wait state"), Controller->GetFishingState(), EPSFishingState::WaitingForBite);
 	for (int32 Frame = 0; Frame < 180; ++Frame) Controller->UpdateFishing(0.0f);
 	TestTrue(TEXT("Fishing stays active without elapsed time"), Controller->IsFishing());
@@ -119,14 +151,43 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Difficulty controls sequence length"), Controller->FishingSequence.Num() >= InputRange.X && Controller->FishingSequence.Num() <= InputRange.Y);
 	const EPSFishingDirection Correct = Controller->FishingSequence[0];
 	const EPSFishingDirection Wrong = static_cast<EPSFishingDirection>((static_cast<int32>(Correct) + 1) % 4);
-	TestFalse(TEXT("Wrong direction has no penalty or progress"), Controller->SubmitFishingDirection(Wrong));
+	const float TimeBeforeWrongInput = Controller->FishingStateTimeRemaining;
+	TestFalse(TEXT("Wrong direction does not progress"), Controller->SubmitFishingDirection(Wrong));
 	TestEqual(TEXT("Wrong direction retains current answer"), Controller->FishingSequenceIndex, 0);
+	TestEqual(TEXT("Wrong direction removes half a second"), Controller->FishingStateTimeRemaining, TimeBeforeWrongInput - 0.5f);
 	const TArray<EPSFishingDirection> Answers = Controller->FishingSequence;
 	for (const EPSFishingDirection Answer : Answers) TestTrue(TEXT("Correct direction advances"), Controller->SubmitFishingDirection(Answer));
 	TestEqual(TEXT("Completing all directions succeeds"), Controller->GetFishingState(), EPSFishingState::Success);
+	TestNotNull(TEXT("Successful catch caches the related icon"), Controller->GetCurrentFishIcon());
 	TestEqual(TEXT("Success immediately awards one fish"), Controller->InventoryComponent->CountItem(EPSItemType::Fish), 1);
+	bool bCaughtFishKeepsRowId = false;
+	for (int32 Index = 0; Index < Controller->InventoryComponent->GetUnlockedBagSlotCount(); ++Index)
+	{
+		const FPSItemStack FishStack = Controller->InventoryComponent->GetBagSlot(Index);
+		bCaughtFishKeepsRowId |= FishStack.ItemType == EPSItemType::Fish && FishStack.ItemId == TEXT("010201");
+	}
+	TestTrue(TEXT("Fishing reward preserves its DataTable row ID"), bCaughtFishKeepsRowId);
+	TestEqual(TEXT("Successful catch awards two fishing XP"),
+		Controller->SkillComponent->GetSkillState(EPSPlayerSkillField::Fishing).Experience, 2);
 	Controller->UpdateFishing(2.0f);
 	TestFalse(TEXT("Result closes after its display time"), Controller->IsFishing());
+	TestTrue(TEXT("Bait can be added"), Controller->InventoryComponent->AddItem(EPSItemType::FishingBait, 1));
+	TestTrue(TEXT("Bobber can be added"), Controller->InventoryComponent->AddItem(EPSItemType::FishingBobber, 1));
+	TestTrue(TEXT("Baited cast starts"), Controller->TryUseFishingRod(Water));
+	TestEqual(TEXT("Bait fixes bite wait to two seconds"), Controller->FishingStateDuration, 2.0f);
+	TestEqual(TEXT("One bait is consumed on cast"), Controller->InventoryComponent->CountItem(EPSItemType::FishingBait), 0);
+	Controller->FishingStateTimeRemaining = 0.01f;
+	Controller->UpdateFishing(0.02f);
+	TestEqual(TEXT("Owned bobber automatically starts the minigame"), Controller->GetFishingState(), EPSFishingState::Minigame);
+	int32 BobberDurability = INDEX_NONE;
+	for (int32 Index = 0; Index < Controller->InventoryComponent->GetUnlockedBagSlotCount(); ++Index)
+	{
+		const FPSItemStack Bobber = Controller->InventoryComponent->GetBagSlot(Index);
+		if (Bobber.ItemType == EPSItemType::FishingBobber) BobberDurability = Bobber.CurrentDurability;
+	}
+	TestEqual(TEXT("Automatic hook consumes one bobber durability"), BobberDurability, 99);
+	Controller->StopFishing();
+	TestTrue(TEXT("Bobber fixture is removable"), Controller->InventoryComponent->RemoveItem(EPSItemType::FishingBobber, 1));
 
 	TestTrue(TEXT("Can start another cast"), Controller->TryUseFishingRod(Water));
 	Pawn->SetActorLocation(Grid->CellToWorldCenter(Shore) + FVector(1, 0, 0));
@@ -165,7 +226,8 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->UpdateFishing(2.0f);
 
 	const int32 ExistingFish = Controller->InventoryComponent->CountItem(EPSItemType::Fish);
-	TestTrue(TEXT("Fish stack can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::Fish, 999 - ExistingFish));
+	TestTrue(TEXT("Fish stack can be filled"), Controller->InventoryComponent->AddItemVariant(
+		EPSItemType::Fish, Controller->GetCurrentFishId(), 999 - ExistingFish));
 	for (int32 Variant = 0; Variant < 9; ++Variant)
 		TestTrue(TEXT("Remaining bag slots can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::TestSeed, 999, Variant));
 	int32 DropsBefore = 0;
@@ -220,13 +282,13 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 		FishingUI->TakeWidget();
 		FishingUI->Refresh(EPSFishingState::Minigame, 8.0f, 10.0f,
 			{EPSFishingDirection::Up, EPSFishingDirection::Left, EPSFishingDirection::Down}, 0,
-			FText::FromString(TEXT("붕어")), 18);
+			FText::FromString(TEXT("붕어")), 18, nullptr);
 		TestEqual(TEXT("Active fishing UI is visible"), FishingUI->GetVisibility(), ESlateVisibility::HitTestInvisible);
 		TestEqual(TEXT("Fishing UI has six direction slots"), FishingUI->DirectionLabels.Num(), 6);
 		TestNotNull(TEXT("Fishing arrow atlas is loaded"), FishingUI->DirectionAtlas.Get());
 		TestEqual(TEXT("Current fishing arrow image is shown in slot three"), FishingUI->DirectionImages[2]->GetVisibility(), ESlateVisibility::HitTestInvisible);
 		TestNotNull(TEXT("Current arrow uses the atlas texture"), FishingUI->DirectionImages[2]->GetBrush().GetResourceObject());
-		FishingUI->Refresh(EPSFishingState::Idle, 0, 0, {}, 0, FText::GetEmpty(), 0);
+		FishingUI->Refresh(EPSFishingState::Idle, 0, 0, {}, 0, FText::GetEmpty(), 0, nullptr);
 		TestEqual(TEXT("Idle fishing UI is hidden"), FishingUI->GetVisibility(), ESlateVisibility::Collapsed);
 	}
 	World->DestroyActor(Renderer);

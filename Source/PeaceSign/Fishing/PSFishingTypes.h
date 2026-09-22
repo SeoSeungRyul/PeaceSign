@@ -4,6 +4,8 @@
 #include "Engine/DataTable.h"
 #include "PSFishingTypes.generated.h"
 
+class UTexture2D;
+
 UENUM(BlueprintType)
 enum class EPSFishingState : uint8
 {
@@ -29,13 +31,36 @@ struct FPSFishDefinition : public FTableRowBase
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText DisplayName = NSLOCTEXT("Fishing", "DefaultFish", "물고기");
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText Name = NSLOCTEXT("Fishing", "DefaultFish", "물고기");
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="1", ClampMax="4")) int32 Difficulty = 1;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="1")) int32 MinSizeCm = 10;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="1")) int32 MaxSizeCm = 30;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.0")) float Weight = 1.0f;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName Season = NAME_None;
-	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName Zone = NAME_None;
+	/** 0=봄, 1=여름, 2=가을, 3=겨울. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0", ClampMax="3")) int32 Season = 0;
+	/** Fishing location IDs. CSV array syntax: "(0,1)". */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) TArray<int32> Location;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="1")) int32 MinSize = 10;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="1")) int32 MaxSize = 30;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText Description;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText DescriptionPlus;
+	/** Row ID in the Icon DataTable. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FName IconID = NAME_None;
+	/** Optional CSV column. Missing values use equal catch weight 1. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, meta=(ClampMin="0.0", DataTableImportOptional)) float Weight = 1.0f;
+
+	bool IsUsable() const
+	{
+		return !Name.IsEmpty() && Difficulty >= 1 && Difficulty <= 4
+			&& Season >= 0 && Season <= 3 && MinSize > 0 && MaxSize >= MinSize;
+	}
+};
+
+/** Row format for the Icon CSV referenced by FPSFishDefinition::IconID. */
+USTRUCT(BlueprintType)
+struct FPSIconDefinition : public FTableRowBase
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) FText Name;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly) TSoftObjectPtr<UTexture2D> Image;
 };
 
 namespace PSFishing

@@ -13,10 +13,12 @@ class UPSGameTimeWidget;
 class UPSInventoryWidget;
 class UPSHotbarWidget;
 class UPSInventoryComponent;
+class UPSPlayerSkillComponent;
 class UPSFishingWidget;
 class UDataTable;
 class UInputAction;
 class UInputMappingContext;
+class UTexture2D;
 class APSGridWorld;
 struct FInputActionValue;
 enum class EPSTileInteractionResult : uint8;
@@ -37,6 +39,8 @@ public:
 	int32 GetHarvestedCropCount() const { return HarvestedCropCount; }
 	UFUNCTION(BlueprintPure, Category = "Inventory")
 	UPSInventoryComponent* GetInventoryComponent() const { return InventoryComponent; }
+	UFUNCTION(BlueprintPure, Category = "Skills")
+	UPSPlayerSkillComponent* GetSkillComponent() const { return SkillComponent; }
 	UFUNCTION(BlueprintCallable, Category = "Inventory|Hotbar")
 	void SelectHotbarSlot(int32 SlotIndex);
 	UFUNCTION(BlueprintPure, Category = "Inventory|Hotbar")
@@ -51,6 +55,10 @@ public:
 	EPSFishingState GetFishingState() const { return FishingState; }
 	UFUNCTION(BlueprintCallable, Category = "Fishing")
 	bool SubmitFishingDirection(EPSFishingDirection Direction);
+	UFUNCTION(BlueprintPure, Category = "Fishing")
+	UTexture2D* GetCurrentFishIcon() const { return CurrentFishIcon; }
+	UFUNCTION(BlueprintPure, Category = "Fishing")
+	FName GetCurrentFishId() const { return CurrentFishId; }
 
 protected:
 	virtual void BeginPlay() override;
@@ -65,6 +73,9 @@ protected:
 	TSubclassOf<UPSFishingWidget> FishingWidgetClass;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing")
 	TObjectPtr<UDataTable> FishDataTable;
+	/** Icon rows referenced by FPSFishDefinition::IconID. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing")
+	TObjectPtr<UDataTable> FishIconDataTable;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
 	float MinBiteDelay = 1.0f;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
@@ -73,6 +84,8 @@ protected:
 	float BiteWindowDuration = 5.0f;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
 	float MinigameDuration = 10.0f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.0"))
+	float WrongInputTimePenalty = 0.5f;
 	virtual void SetupInputComponent() override;
 	virtual void PlayerTick(float DeltaTime) override;
 
@@ -134,12 +147,14 @@ private:
 	void BeginFishingBite();
 	void BeginFishingMinigame();
 	void CompleteFishing(bool bSuccess);
-	void StopFishing(bool bCancelled = true);
+	void StopFishing(bool bCancelled = true, bool bConsumeDurability = true);
+	void ConsumeFishingRodDurability();
 	void SetFishingMovementLocked(bool bLocked);
 	void RefreshFishingWidget();
 	void GenerateFishingSequence();
-	FPSFishDefinition SelectFishDefinition() const;
-	void DropFishingReward();
+	FPSFishDefinition SelectFishDefinition(FName& OutFishId) const;
+	UTexture2D* ResolveFishIcon(FName IconID) const;
+	void DropFishingReward(int32 Quantity = 1);
 	void HandleFishingUp();
 	void HandleFishingLeft();
 	void HandleFishingDown();
@@ -153,7 +168,15 @@ private:
 	TArray<EPSFishingDirection> FishingSequence;
 	int32 FishingSequenceIndex = 0;
 	FPSFishDefinition CurrentFish;
+	FName CurrentFishId = NAME_None;
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> CurrentFishIcon;
 	int32 CurrentFishSizeCm = 0;
+	float FishingMinigameTimeBonus = 0.0f;
+	float FishingExtraFishChance = 0.0f;
+	bool bFishingAutoHook = false;
+	bool bFishingDurabilityConsumed = false;
+	bool bEndingFishing = false;
 	void HandleHotbarSlot(const FInputActionValue& Value, int32 SlotIndex);
 	UFUNCTION() void RefreshEquipmentFromHotbar();
 	EPSTileInteractionResult UseEquippedItemOnCell(FIntPoint Cell);
@@ -170,6 +193,8 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UPSFishingWidget> FishingWidget;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Inventory", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UPSInventoryComponent> InventoryComponent;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Skills", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UPSPlayerSkillComponent> SkillComponent;
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> HotbarMappingContext;
 	UPROPERTY(Transient)

@@ -60,6 +60,12 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Starter hoe is real inventory data"), Inventory->CountItem(EPSItemType::Hoe), 1);
 	TestEqual(TEXT("Starter seeds are real inventory data"), Inventory->CountItem(EPSItemType::TestSeed), 24);
 	TestEqual(TEXT("Starter fishing rod remains usable from hotbar slot three"), Inventory->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
+	TestEqual(TEXT("Starter rod is the wooden tier"), Inventory->GetHotbarSlot(2).ItemId, PSItemIds::WoodenFishingRod);
+	TestEqual(TEXT("Starter rod begins at full durability"), Inventory->GetHotbarSlot(2).CurrentDurability, 100);
+	bool bDestroyed = false;
+	TestTrue(TEXT("Rod durability can be consumed"), Inventory->ConsumeHotbarDurability(2, 1, bDestroyed));
+	TestFalse(TEXT("A healthy rod is retained"), bDestroyed);
+	TestEqual(TEXT("Rod durability decreases by one"), Inventory->GetHotbarSlot(2).CurrentDurability, 99);
 	TestNull(TEXT("Initial bag is independent and empty"), Widget->GetItem(0));
 	TestTrue(TEXT("Hotbar item can move into bag"), Inventory->MoveItem(
 		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Bag, 0));
@@ -95,6 +101,18 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Added items enter bag instead of hotbar"), Inventory->GetBagSlot(0).ItemType, EPSItemType::Wood);
 	TestFalse(TEXT("Invalid quantity is rejected"), Inventory->AddItem(EPSItemType::Wood, 0));
 	TestTrue(TEXT("A different crop seed can be added"), Inventory->AddItem(EPSItemType::TestSeed, 4, 1));
+	TestTrue(TEXT("Asterium rod variant can be added"), Inventory->AddItemVariant(
+		EPSItemType::FishingRod, PSItemIds::AsteriumFishingRod));
+	const int32 AsteriumSlot = Inventory->BagSlots.IndexOfByPredicate([](const FPSItemStack& Slot)
+	{
+		return Slot.ItemId == PSItemIds::AsteriumFishingRod;
+	});
+	TestTrue(TEXT("Rod variants retain their item ID"), AsteriumSlot != INDEX_NONE);
+	if (AsteriumSlot != INDEX_NONE)
+	{
+		TestEqual(TEXT("Asterium durability is infinite"), Inventory->BagSlots[AsteriumSlot].CurrentDurability, INDEX_NONE);
+		TestEqual(TEXT("Asterium grants four bonus seconds"), PSItems::GetDefinition(Inventory->BagSlots[AsteriumSlot]).FishingTimeBonus, 4.0f);
+	}
 	TestEqual(TEXT("Crop-specific count stays separate"), Inventory->CountItem(EPSItemType::TestSeed, 1), 4);
 	const int32 CropOneSlot = Inventory->BagSlots.IndexOfByPredicate([](const FPSItemStack& Slot)
 	{
@@ -126,6 +144,8 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Legacy inventory reloads"), LoadedInventory->LoadInventory());
 	TestEqual(TEXT("Legacy first row migrates to hotbar"), LoadedInventory->GetHotbarSlot(0).ItemType, EPSItemType::Hoe);
 	TestEqual(TEXT("Legacy fixed-key fishing migrates a rod to hotbar slot three"), LoadedInventory->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
+	TestEqual(TEXT("Legacy rod receives its default ID"), LoadedInventory->GetHotbarSlot(2).ItemId, PSItemIds::WoodenFishingRod);
+	TestEqual(TEXT("Legacy rod receives full durability"), LoadedInventory->GetHotbarSlot(2).CurrentDurability, 100);
 	TestTrue(TEXT("Legacy migration creates a separate empty bag"), LoadedInventory->GetBagSlot(0).IsEmpty());
 	UGameplayStatics::DeleteGameInSlot(Inventory->SaveSlotName, 0);
 

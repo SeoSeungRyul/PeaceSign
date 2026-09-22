@@ -32,5 +32,6 @@ void APSWorldItemActor::HandleOverlap(UPrimitiveComponent*, AActor* OtherActor, 
 	const APawn* Pawn = Cast<APawn>(OtherActor);
 	APSPlayerController* Controller = Pawn ? Cast<APSPlayerController>(Pawn->GetController()) : nullptr;
 	UPSInventoryComponent* Inventory = Controller ? Controller->GetInventoryComponent() : nullptr;
-	if (Inventory && !Item.IsEmpty() && Inventory->AddItem(Item.ItemType, Item.Quantity, Item.CropId)) Destroy();
+	if (Inventory && !Item.IsEmpty() && Inventory->AddItemVariant(
+		Item.ItemType, Item.ItemId, Item.Quantity, Item.CropId, Item.CurrentDurability)) Destroy();
 }
