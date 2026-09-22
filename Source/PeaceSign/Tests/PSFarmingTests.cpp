@@ -6,6 +6,7 @@
 #include "../World/PSCropGrowth.h"
 #include "../PSPlayerController.h"
 #include "../Inventory/PSInventoryComponent.h"
+#include "../Skills/PSPlayerSkillComponent.h"
 #include "../Time/PSGameTimeSubsystem.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/World.h"
@@ -115,9 +116,12 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 		APSPlayerController::StaticClass(), FTransform::Identity);
 	Controller->InventoryComponent->SaveSlotName = InventorySlot;
 	Controller->InventoryComponent->bAutoSave = false;
+	Controller->SkillComponent->SaveSlotName = TEXT("FarmingSkillTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	Controller->SkillComponent->bAutoSave = false;
 	Controller->GridWorld = Grid;
 	Controller->FinishSpawning(FTransform::Identity);
 	Controller->InventoryComponent->ResetToDefaults();
+	Controller->SkillComponent->ResetSkills();
 	TestEqual(TEXT("Controller instance has ten hotbar mappings"), Controller->HotbarMappingContext->GetMappings().Num(), 10);
 	for (const FEnhancedActionKeyMapping& Mapping : Controller->HotbarMappingContext->GetMappings())
 	{
@@ -160,6 +164,9 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Crop reaches harvest stage"), Grid->GetCropStage(Cells[0]), PSCropGrowth::MaxStage);
 	Controller->SelectHotbarSlot(0);
 	TestEqual(TEXT("Hoe harvest succeeds"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Harvested);
+	TestEqual(TEXT("Successful harvest consumes one hoe durability"), Controller->InventoryComponent->GetHotbarSlot(0).CurrentDurability, 99);
+	TestEqual(TEXT("Successful harvest awards two farming XP"),
+		Controller->SkillComponent->GetSkillState(EPSPlayerSkillField::Farming).Experience, 2);
 	TestEqual(TEXT("Harvest adds matching produce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, 0), 1);
 	TestEqual(TEXT("Harvest leaves empty tilled soil"), Grid->GetCropType(Cells[0]), EPSCropType::None);
 
@@ -172,6 +179,7 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Full inventory blocks harvest"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::InventoryFull);
 	TestEqual(TEXT("Blocked harvest keeps mature crop"), Grid->GetCropStage(Cells[1]), PSCropGrowth::MaxStage);
 	TestEqual(TEXT("Blocked harvest does not add produce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, 0), 999);
+	TestEqual(TEXT("Blocked harvest consumes no hoe durability"), Controller->InventoryComponent->GetHotbarSlot(0).CurrentDurability, 99);
 
 	UGameplayStatics::DeleteGameInSlot(WorldSlot, 0);
 	UGameplayStatics::DeleteGameInSlot(InventorySlot, 0);

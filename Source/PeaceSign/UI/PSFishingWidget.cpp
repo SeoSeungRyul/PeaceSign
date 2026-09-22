@@ -94,6 +94,10 @@ void UPSFishingWidget::BuildWidgetTree()
 	StateLabel->SetShadowColorAndOpacity(FLinearColor(1.0f, 0.85f, 0.58f, 0.75f));
 	StateLabel->SetJustification(ETextJustify::Center);
 	Rows->AddChildToVerticalBox(StateLabel);
+	ResultIcon = WidgetTree->ConstructWidget<UImage>();
+	ResultIcon->SetDesiredSizeOverride(FVector2D(48, 48));
+	ResultIcon->SetVisibility(ESlateVisibility::Collapsed);
+	Rows->AddChildToVerticalBox(ResultIcon)->SetHorizontalAlignment(HAlign_Center);
 	TimeBar = WidgetTree->ConstructWidget<UProgressBar>();
 	FProgressBarStyle BarStyle;
 	BarStyle.SetBackgroundImage(RoundedBrush(FLinearColor(0.52f, 0.37f, 0.28f, 1.0f), FLinearColor(1.0f, 0.91f, 0.72f, 1.0f), 3.0f));
@@ -142,7 +146,7 @@ void UPSFishingWidget::BuildWidgetTree()
 
 void UPSFishingWidget::Refresh(const EPSFishingState State, const float TimeRemaining, const float StateDuration,
 	const TArray<EPSFishingDirection>& Sequence, const int32 SequenceIndex,
-	const FText& FishName, const int32 FishSizeCm, const float ResultOpacity)
+	const FText& FishName, const int32 FishSizeCm, UTexture2D* FishIcon, const float ResultOpacity)
 {
 	BuildWidgetTree();
 	if (!Panel || !StateLabel || !TimeBar) return;
@@ -162,6 +166,9 @@ void UPSFishingWidget::Refresh(const EPSFishingState State, const float TimeRema
 	TimeBar->SetVisibility(State == EPSFishingState::Success || State == EPSFishingState::Failure
 		? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
 	DirectionRow->SetVisibility(State == EPSFishingState::Minigame ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	ResultIcon->SetVisibility(State == EPSFishingState::Success && FishIcon
+		? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	if (State == EPSFishingState::Success && FishIcon) ResultIcon->SetBrushFromTexture(FishIcon, true);
 	switch (State)
 	{
 	case EPSFishingState::WaitingForBite: StateLabel->SetText(NSLOCTEXT("Fishing", "Waiting", "찌를 바라보는 중...  F / 우클릭 취소")); break;

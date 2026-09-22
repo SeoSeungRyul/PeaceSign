@@ -49,11 +49,27 @@ public:
 	bool CanAddItem(EPSItemType ItemType, int32 Quantity = 1, int32 CropId = -1) const;
 	UFUNCTION(BlueprintCallable, Category="Inventory|Bag")
 	bool AddItem(EPSItemType ItemType, int32 Quantity = 1, int32 CropId = -1);
+	UFUNCTION(BlueprintPure, Category="Inventory|Bag")
+	bool CanAddItemVariant(EPSItemType ItemType, FName ItemId, int32 Quantity = 1, int32 CropId = -1,
+		int32 CurrentDurability = -1) const;
+	UFUNCTION(BlueprintCallable, Category="Inventory|Bag")
+	bool AddItemVariant(EPSItemType ItemType, FName ItemId, int32 Quantity = 1, int32 CropId = -1,
+		int32 CurrentDurability = -1);
 	/** Removes matching items from the bag first and then the hotbar. */
 	UFUNCTION(BlueprintCallable, Category="Inventory")
 	bool RemoveItem(EPSItemType ItemType, int32 Quantity = 1, int32 CropId = -1);
 	UFUNCTION(BlueprintCallable, Category="Inventory|Hotbar")
 	bool RemoveFromHotbarSlot(int32 SlotIndex, int32 Quantity = 1);
+	/** Applies durability loss to one hotbar tool. A tool is removed when it reaches zero. */
+	UFUNCTION(BlueprintCallable, Category="Inventory|Durability")
+	bool ConsumeHotbarDurability(int32 SlotIndex, int32 Amount, bool& bDestroyed);
+	/** Applies durability loss to the first matching owned item, preferring the bag. */
+	UFUNCTION(BlueprintCallable, Category="Inventory|Durability")
+	bool ConsumeItemDurability(EPSItemType ItemType, int32 Amount, bool& bDestroyed);
+	UFUNCTION(BlueprintCallable, Category="Inventory|Durability")
+	bool RestoreDurability(EPSInventoryArea Area, int32 SlotIndex, int32 Amount);
+	UFUNCTION(BlueprintPure, Category="Inventory|Durability")
+	float GetDurabilityRatio(EPSInventoryArea Area, int32 SlotIndex) const;
 	UFUNCTION(BlueprintCallable, Category="Inventory")
 	bool MoveItem(EPSInventoryArea FromArea, int32 FromIndex, EPSInventoryArea ToArea, int32 ToIndex);
 	UFUNCTION(BlueprintCallable, Category="Inventory")

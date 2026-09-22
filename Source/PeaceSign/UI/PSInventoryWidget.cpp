@@ -177,9 +177,12 @@ void UPSInventoryWidget::SelectItem(int32 Index)
 	SelectedIndex = Index;
 	if (!DetailName) return;
 	const auto* Item = GetItem(Index);
-	const FPSItemDefinition& Definition = PSItems::GetDefinition(Item ? Item->ItemType : EPSItemType::None);
+	const FPSItemDefinition& Definition = Item ? PSItems::GetDefinition(*Item) : PSItems::GetDefinition(EPSItemType::None);
 	DetailName->SetText(Definition.Name);
-	DetailCount->SetText(Item ? FText::FromString(FString::Printf(TEXT("보유 수량   %d"), Item->Quantity)) : FText::GetEmpty());
+	if (Item && Definition.bInfiniteDurability) DetailCount->SetText(FText::FromString(TEXT("내구도   무한")));
+	else if (Item && Definition.MaxDurability > 0) DetailCount->SetText(FText::FromString(
+		FString::Printf(TEXT("내구도   %d / %d"), Item->CurrentDurability, Definition.MaxDurability)));
+	else DetailCount->SetText(Item ? FText::FromString(FString::Printf(TEXT("보유 수량   %d"), Item->Quantity)) : FText::GetEmpty());
 	DetailDescription->SetText(Definition.Description);
 	int32 Occupied = 0;
 	const int32 Unlocked = InventoryComponent ? InventoryComponent->GetUnlockedBagSlotCount() : 0;
@@ -249,7 +252,7 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 	}
 	const auto* Item = Inventory->GetItem(Index);
 	if (!Item) return Layer;
-	const FPSItemDefinition& Definition = PSItems::GetDefinition(Item->ItemType);
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(*Item);
 	const TObjectPtr<UTexture2D>* IconTexture = Inventory->ItemIcons.Find(Item->ItemType);
 	if (IconTexture && IconTexture->Get())
 	{
@@ -270,12 +273,25 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 		default: Rect(19, 25, 22, 15, C); Rect(23, 21, 13, 23, C); Rect(41, 21, 7, 23, C); Rect(21, 28, 3, 3, Hex(TEXT("243C3A"))); break;
 		}
 	}
-	const FString Count = FString::FromInt(Item->Quantity);
-	const float X = 57.0f - Count.Len() * 8.0f;
-	Rect(X - 3, 44, Count.Len() * 8 + 5, 16, FLinearColor(0.045f, 0.032f, 0.02f, 0.85f));
-	FSlateDrawElement::MakeText(Elements, ++Layer,
-		Geometry.ToPaintGeometry(FVector2D(50, 18) * Scale, FSlateLayoutTransform(FVector2D(X, 44) * Scale)),
-		Count, FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, Hex(TEXT("FFF0D1")));
+	if (Definition.bInfiniteDurability)
+	{
+		Rect(8, 53, 48, 4, Hex(TEXT("B99BFF")));
+	}
+	else if (Definition.MaxDurability > 0)
+	{
+		Rect(8, 53, 48, 4, Hex(TEXT("33251C")));
+		const float Ratio = FMath::Clamp(static_cast<float>(Item->CurrentDurability) / Definition.MaxDurability, 0.0f, 1.0f);
+		Rect(8, 53, 48 * Ratio, 4, Ratio > 0.3f ? Hex(TEXT("78C679")) : Hex(TEXT("E05A47")));
+	}
+	if (Definition.MaxStack > 1 || Item->Quantity > 1)
+	{
+		const FString Count = FString::FromInt(Item->Quantity);
+		const float X = 57.0f - Count.Len() * 8.0f;
+		Rect(X - 3, 44, Count.Len() * 8 + 5, 16, FLinearColor(0.045f, 0.032f, 0.02f, 0.85f));
+		FSlateDrawElement::MakeText(Elements, ++Layer,
+			Geometry.ToPaintGeometry(FVector2D(50, 18) * Scale, FSlateLayoutTransform(FVector2D(X, 44) * Scale)),
+			Count, FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, Hex(TEXT("FFF0D1")));
+	}
 	return Layer;
 }
 
@@ -325,7 +341,7 @@ void UPSInventorySlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const
 	if (Inventory)
 	{
 		const auto* Item = Inventory->GetItem(Index);
-		SetToolTipText(Item ? PSItems::GetDefinition(Item->ItemType).Name : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
+		SetToolTipText(Item ? PSItems::GetDefinition(*Item).Name : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
 	}
 }
 

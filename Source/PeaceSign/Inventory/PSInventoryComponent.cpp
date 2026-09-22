@@ -4,7 +4,7 @@
 
 namespace
 {
-	constexpr int32 CurrentInventorySaveVersion = 2;
+	constexpr int32 CurrentInventorySaveVersion = 3;
 
 	bool UsesCropId(const EPSItemType ItemType)
 	{
@@ -21,7 +21,14 @@ namespace
 		return !Slot.IsEmpty() && Slot.ItemType == ItemType && (CropId < 0 || Slot.CropId == CropId);
 	}
 
-	void SanitizeSlots(TArray<FPSItemStack>& Slots)
+	bool MatchesStack(const FPSItemStack& Slot, const EPSItemType ItemType, const FName ItemId,
+		const int32 CropId, const int32 CurrentDurability)
+	{
+		return !Slot.IsEmpty() && Slot.ItemType == ItemType && Slot.ItemId == ItemId
+			&& Slot.CropId == CropId && Slot.CurrentDurability == CurrentDurability;
+	}
+
+	void SanitizeSlots(TArray<FPSItemStack>& Slots, const bool bLegacyDurability)
 	{
 		for (FPSItemStack& Slot : Slots)
 		{
@@ -29,7 +36,17 @@ namespace
 			else
 			{
 				Slot.CropId = NormalizeCropId(Slot.ItemType, Slot.CropId);
-				Slot.Quantity = FMath::Min(Slot.Quantity, PSItems::GetDefinition(Slot.ItemType).MaxStack);
+				if (Slot.ItemId.IsNone()) Slot.ItemId = PSItems::GetDefaultItemId(Slot.ItemType);
+				const FPSItemDefinition& Definition = PSItems::GetDefinition(Slot);
+				Slot.Quantity = FMath::Min(Slot.Quantity, Definition.MaxStack);
+				if (Definition.bInfiniteDurability) Slot.CurrentDurability = INDEX_NONE;
+				else if (Definition.MaxDurability > 0)
+				{
+					if (bLegacyDurability && Slot.CurrentDurability <= 0) Slot.CurrentDurability = Definition.MaxDurability;
+					Slot.CurrentDurability = FMath::Clamp(Slot.CurrentDurability, 0, Definition.MaxDurability);
+					if (Slot.CurrentDurability <= 0) Slot.Clear();
+				}
+				else Slot.CurrentDurability = INDEX_NONE;
 			}
 		}
 	}
@@ -119,15 +136,25 @@ bool UPSInventoryComponent::HasItem(const EPSItemType ItemType, const int32 Quan
 
 bool UPSInventoryComponent::CanAddItem(const EPSItemType ItemType, const int32 Quantity, const int32 CropId) const
 {
+	return CanAddItemVariant(ItemType, PSItems::GetDefaultItemId(ItemType), Quantity, CropId);
+}
+
+bool UPSInventoryComponent::CanAddItemVariant(const EPSItemType ItemType, FName ItemId, const int32 Quantity,
+	const int32 CropId, int32 CurrentDurability) const
+{
 	if (!PSItems::IsValid(ItemType) || Quantity <= 0) return false;
+	if (ItemId.IsNone()) ItemId = PSItems::GetDefaultItemId(ItemType);
 	int64 Capacity = 0;
-	const int32 MaxStack = PSItems::GetDefinition(ItemType).MaxStack;
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(ItemType, ItemId);
+	const int32 MaxStack = Definition.MaxStack;
 	const int32 NormalizedCropId = NormalizeCropId(ItemType, CropId);
+	CurrentDurability = Definition.bInfiniteDurability || Definition.MaxDurability <= 0
+		? INDEX_NONE : FMath::Clamp(CurrentDurability < 0 ? Definition.MaxDurability : CurrentDurability, 1, Definition.MaxDurability);
 	for (int32 Index = 0; Index < UnlockedBagSlotCount && BagSlots.IsValidIndex(Index); ++Index)
 	{
 		const FPSItemStack& Slot = BagSlots[Index];
 		if (Slot.IsEmpty()) Capacity += MaxStack;
-		else if (Slot.ItemType == ItemType && Slot.CropId == NormalizedCropId)
+		else if (MatchesStack(Slot, ItemType, ItemId, NormalizedCropId, CurrentDurability))
 			Capacity += FMath::Max(0, MaxStack - Slot.Quantity);
 		if (Capacity >= Quantity) return true;
 	}
@@ -136,14 +163,24 @@ bool UPSInventoryComponent::CanAddItem(const EPSItemType ItemType, const int32 Q
 
 bool UPSInventoryComponent::AddItem(const EPSItemType ItemType, const int32 Quantity, const int32 CropId)
 {
-	if (!CanAddItem(ItemType, Quantity, CropId)) return false;
+	return AddItemVariant(ItemType, PSItems::GetDefaultItemId(ItemType), Quantity, CropId);
+}
+
+bool UPSInventoryComponent::AddItemVariant(const EPSItemType ItemType, FName ItemId, const int32 Quantity,
+	const int32 CropId, int32 CurrentDurability)
+{
+	if (ItemId.IsNone()) ItemId = PSItems::GetDefaultItemId(ItemType);
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(ItemType, ItemId);
+	CurrentDurability = Definition.bInfiniteDurability || Definition.MaxDurability <= 0
+		? INDEX_NONE : FMath::Clamp(CurrentDurability < 0 ? Definition.MaxDurability : CurrentDurability, 1, Definition.MaxDurability);
+	if (!CanAddItemVariant(ItemType, ItemId, Quantity, CropId, CurrentDurability)) return false;
 	int32 Remaining = Quantity;
-	const int32 MaxStack = PSItems::GetDefinition(ItemType).MaxStack;
+	const int32 MaxStack = Definition.MaxStack;
 	const int32 NormalizedCropId = NormalizeCropId(ItemType, CropId);
 	for (int32 Index = 0; Index < UnlockedBagSlotCount && Remaining > 0; ++Index)
 	{
 		FPSItemStack& Slot = BagSlots[Index];
-		if (Slot.ItemType != ItemType || Slot.CropId != NormalizedCropId || Slot.IsEmpty()) continue;
+		if (!MatchesStack(Slot, ItemType, ItemId, NormalizedCropId, CurrentDurability)) continue;
 		const int32 Added = FMath::Min(Remaining, MaxStack - Slot.Quantity);
 		Slot.Quantity += Added;
 		Remaining -= Added;
@@ -154,11 +191,83 @@ bool UPSInventoryComponent::AddItem(const EPSItemType ItemType, const int32 Quan
 		if (!Slot.IsEmpty()) continue;
 		Slot.ItemType = ItemType;
 		Slot.CropId = NormalizedCropId;
+		Slot.ItemId = ItemId;
+		Slot.CurrentDurability = CurrentDurability;
 		Slot.Quantity = FMath::Min(Remaining, MaxStack);
 		Remaining -= Slot.Quantity;
 	}
 	NotifyChanged();
 	return true;
+}
+
+bool UPSInventoryComponent::ConsumeHotbarDurability(const int32 SlotIndex, const int32 Amount, bool& bDestroyed)
+{
+	bDestroyed = false;
+	if (!IsHotbarSlot(SlotIndex) || Amount <= 0) return false;
+	FPSItemStack& Stack = HotbarSlots[SlotIndex];
+	if (Stack.IsEmpty()) return false;
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(Stack);
+	if (Definition.bInfiniteDurability) return true;
+	if (!PSItems::UsesDurability(Stack)) return false;
+	Stack.CurrentDurability = FMath::Max(0, Stack.CurrentDurability - Amount);
+	if (Stack.CurrentDurability == 0)
+	{
+		Stack.Clear();
+		bDestroyed = true;
+	}
+	NotifyChanged();
+	return true;
+}
+
+bool UPSInventoryComponent::ConsumeItemDurability(const EPSItemType ItemType, const int32 Amount, bool& bDestroyed)
+{
+	bDestroyed = false;
+	if (!PSItems::IsValid(ItemType) || Amount <= 0) return false;
+	const auto ConsumeFrom = [&](TArray<FPSItemStack>& Slots, const int32 Count) -> bool
+	{
+		for (int32 Index = 0; Index < FMath::Min(Count, Slots.Num()); ++Index)
+		{
+			FPSItemStack& Stack = Slots[Index];
+			if (Stack.IsEmpty() || Stack.ItemType != ItemType) continue;
+			const FPSItemDefinition& Definition = PSItems::GetDefinition(Stack);
+			if (Definition.bInfiniteDurability) return true;
+			if (!PSItems::UsesDurability(Stack)) continue;
+			Stack.CurrentDurability = FMath::Max(0, Stack.CurrentDurability - Amount);
+			if (Stack.CurrentDurability == 0)
+			{
+				Stack.Clear();
+				bDestroyed = true;
+			}
+			return true;
+		}
+		return false;
+	};
+	const bool bConsumed = ConsumeFrom(BagSlots, UnlockedBagSlotCount)
+		|| ConsumeFrom(HotbarSlots, HotbarSlotCount);
+	if (bConsumed) NotifyChanged();
+	return bConsumed;
+}
+
+bool UPSInventoryComponent::RestoreDurability(const EPSInventoryArea Area, const int32 SlotIndex, const int32 Amount)
+{
+	if (!IsAreaSlotUnlocked(Area, SlotIndex) || Amount <= 0) return false;
+	FPSItemStack& Stack = GetAreaSlots(Area)[SlotIndex];
+	if (!PSItems::UsesDurability(Stack)) return false;
+	const int32 Before = Stack.CurrentDurability;
+	Stack.CurrentDurability = FMath::Min(PSItems::GetDefinition(Stack).MaxDurability, Before + Amount);
+	if (Before == Stack.CurrentDurability) return false;
+	NotifyChanged();
+	return true;
+}
+
+float UPSInventoryComponent::GetDurabilityRatio(const EPSInventoryArea Area, const int32 SlotIndex) const
+{
+	if (!IsAreaSlotUnlocked(Area, SlotIndex)) return 0.0f;
+	const FPSItemStack& Stack = GetAreaSlots(Area)[SlotIndex];
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(Stack);
+	if (Definition.bInfiniteDurability) return 1.0f;
+	return Definition.MaxDurability > 0
+		? FMath::Clamp(static_cast<float>(Stack.CurrentDurability) / Definition.MaxDurability, 0.0f, 1.0f) : 0.0f;
 }
 
 bool UPSInventoryComponent::RemoveItem(const EPSItemType ItemType, const int32 Quantity, const int32 CropId)
@@ -208,9 +317,10 @@ bool UPSInventoryComponent::MoveItem(const EPSInventoryArea FromArea, const int3
 		Destination = Source;
 		Source.Clear();
 	}
-	else if (Source.ItemType == Destination.ItemType && Source.CropId == Destination.CropId)
+	else if (Source.ItemType == Destination.ItemType && Source.CropId == Destination.CropId
+		&& Source.ItemId == Destination.ItemId && Source.CurrentDurability == Destination.CurrentDurability)
 	{
-		const int32 Capacity = PSItems::GetDefinition(Source.ItemType).MaxStack - Destination.Quantity;
+		const int32 Capacity = PSItems::GetDefinition(Source).MaxStack - Destination.Quantity;
 		if (Capacity <= 0) return false;
 		const int32 Moved = FMath::Min(Capacity, Source.Quantity);
 		Destination.Quantity += Moved;
@@ -240,11 +350,14 @@ void UPSInventoryComponent::InitializeDefaults()
 	UnlockedBagSlotCount = 10;
 	HotbarSlots[0].ItemType = EPSItemType::Hoe;
 	HotbarSlots[0].Quantity = 1;
+	HotbarSlots[0].CurrentDurability = PSItems::GetDefinition(EPSItemType::Hoe).MaxDurability;
 	HotbarSlots[1].ItemType = EPSItemType::TestSeed;
 	HotbarSlots[1].CropId = 0;
 	HotbarSlots[1].Quantity = 24;
 	HotbarSlots[2].ItemType = EPSItemType::FishingRod;
+	HotbarSlots[2].ItemId = PSItemIds::WoodenFishingRod;
 	HotbarSlots[2].Quantity = 1;
+	HotbarSlots[2].CurrentDurability = PSItems::GetDefinition(HotbarSlots[2]).MaxDurability;
 }
 
 void UPSInventoryComponent::NotifyChanged()
@@ -296,14 +409,18 @@ bool UPSInventoryComponent::LoadInventory()
 	{
 		return false;
 	}
-	SanitizeSlots(HotbarSlots);
-	SanitizeSlots(BagSlots);
+	const bool bLegacyDurability = Save->DataVersion < CurrentInventorySaveVersion;
+	SanitizeSlots(HotbarSlots, bLegacyDurability);
+	SanitizeSlots(BagSlots, bLegacyDurability);
 	if (Save->DataVersion < 1 && CountItem(EPSItemType::FishingRod) == 0 && HotbarSlots[2].IsEmpty())
 	{
 		HotbarSlots[2].ItemType = EPSItemType::FishingRod;
+		HotbarSlots[2].ItemId = PSItemIds::WoodenFishingRod;
 		HotbarSlots[2].Quantity = 1;
+		HotbarSlots[2].CurrentDurability = PSItems::GetDefinition(HotbarSlots[2]).MaxDurability;
 		bMigrated = true;
 	}
+	if (bLegacyDurability) bMigrated = true;
 	if (bMigrated && bAutoSave) SaveInventory();
 	OnInventoryChanged.Broadcast();
 	return true;

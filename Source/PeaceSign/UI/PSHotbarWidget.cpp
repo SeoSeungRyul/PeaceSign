@@ -122,7 +122,7 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 		Key, FCoreStyle::GetDefaultFontStyle("Bold", 9), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
 	const FPSItemStack* Item = Hotbar->GetItem(Index);
 	if (!Item) return Layer;
-	const FPSItemDefinition& Definition = PSItems::GetDefinition(Item->ItemType);
+	const FPSItemDefinition& Definition = PSItems::GetDefinition(*Item);
 	const FLinearColor Color = Definition.Color;
 	switch (Definition.PlaceholderIcon)
 	{
@@ -133,12 +133,25 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 	case 4: Rect(21, 23, 22, 22, Color); Rect(17, 30, 30, 11, Color); break;
 	default: Rect(19, 25, 22, 15, Color); Rect(23, 21, 13, 23, Color); Rect(41, 21, 7, 23, Color); break;
 	}
-	const FString Count = FString::FromInt(Item->Quantity);
-	const float X = 57.0f - Count.Len() * 8.0f;
-	Rect(X - 3, 44, Count.Len() * 8 + 5, 16, FLinearColor(0.045f, 0.032f, 0.02f, 0.85f));
-	FSlateDrawElement::MakeText(Elements, ++Layer,
-		Geometry.ToPaintGeometry(FVector2D(50, 18) * Scale, FSlateLayoutTransform(FVector2D(X, 44) * Scale)),
-		Count, FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
+	if (Definition.bInfiniteDurability)
+	{
+		Rect(8, 53, 48, 4, HotbarHex(TEXT("B99BFF")));
+	}
+	else if (Definition.MaxDurability > 0)
+	{
+		Rect(8, 53, 48, 4, HotbarHex(TEXT("33251C")));
+		const float Ratio = FMath::Clamp(static_cast<float>(Item->CurrentDurability) / Definition.MaxDurability, 0.0f, 1.0f);
+		Rect(8, 53, 48 * Ratio, 4, Ratio > 0.3f ? HotbarHex(TEXT("78C679")) : HotbarHex(TEXT("E05A47")));
+	}
+	if (Definition.MaxStack > 1 || Item->Quantity > 1)
+	{
+		const FString Count = FString::FromInt(Item->Quantity);
+		const float X = 57.0f - Count.Len() * 8.0f;
+		Rect(X - 3, 44, Count.Len() * 8 + 5, 16, FLinearColor(0.045f, 0.032f, 0.02f, 0.85f));
+		FSlateDrawElement::MakeText(Elements, ++Layer,
+			Geometry.ToPaintGeometry(FVector2D(50, 18) * Scale, FSlateLayoutTransform(FVector2D(X, 44) * Scale)),
+			Count, FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
+	}
 	return Layer;
 }
 
@@ -182,5 +195,5 @@ void UPSHotbarSlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const FP
 	Super::NativeOnMouseEnter(Geometry, Event);
 	if (!Hotbar) return;
 	const FPSItemStack* Item = Hotbar->GetItem(Index);
-	SetToolTipText(Item ? PSItems::GetDefinition(Item->ItemType).Name : FText::FromString(TEXT("빈 단축 슬롯")));
+	SetToolTipText(Item ? PSItems::GetDefinition(*Item).Name : FText::FromString(TEXT("빈 단축 슬롯")));
 }
