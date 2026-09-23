@@ -53,6 +53,9 @@ public:
 	void SelectItem(int32 Index);
 	int32 GetSelectedIndex() const { return SelectedIndex; }
 	UPSInventoryComponent* GetInventoryComponent() const { return InventoryComponent; }
+	FText GetItemDisplayName(const FPSItemStack& Item) const;
+	FText GetItemDescription(const FPSItemStack& Item) const;
+	UTexture2D* GetItemIcon(const FPSItemStack& Item) const;
 	UFUNCTION(BlueprintCallable, Category="Inventory") void CloseInventory();
 	// These brushes accept artist textures in a Widget Blueprint child without changing interaction code.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush SlotBrush;

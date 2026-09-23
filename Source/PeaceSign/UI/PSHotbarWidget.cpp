@@ -8,6 +8,7 @@
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
 #include "Components/SizeBox.h"
+#include "Engine/Texture2D.h"
 #include "InputCoreTypes.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
@@ -83,6 +84,18 @@ bool UPSHotbarWidget::MoveItem(const EPSInventoryArea FromArea, const int32 From
 		FromArea, FromIndex, EPSInventoryArea::Hotbar, ToIndex);
 }
 
+FText UPSHotbarWidget::GetItemDisplayName(const FPSItemStack& Item) const
+{
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	return Controller ? Controller->GetItemDisplayName(Item) : PSItems::GetDefinition(Item).Name;
+}
+
+UTexture2D* UPSHotbarWidget::GetItemIcon(const FPSItemStack& Item) const
+{
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	return Controller ? Controller->GetItemIcon(Item) : nullptr;
+}
+
 void UPSHotbarWidget::RefreshHotbar()
 {
 	InvalidateLayoutAndVolatility();
@@ -123,15 +136,25 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 	const FPSItemStack* Item = Hotbar->GetItem(Index);
 	if (!Item) return Layer;
 	const FPSItemDefinition& Definition = PSItems::GetDefinition(*Item);
-	const FLinearColor Color = Definition.Color;
-	switch (Definition.PlaceholderIcon)
+	if (UTexture2D* ItemIcon = Hotbar->GetItemIcon(*Item))
 	{
-	case 0: Rect(29, 16, 5, 34, HotbarHex(TEXT("735037"))); Rect(17, 14, 29, 8, Color); break;
-	case 1: Rect(20, 24, 24, 23, HotbarHex(TEXT("E5CE95"))); Rect(24, 20, 16, 5, HotbarHex(TEXT("765A36"))); Rect(30, 28, 4, 13, Color); break;
-	case 2: Rect(24, 25, 19, 17, Color); Rect(28, 42, 11, 6, Color); Rect(34, 16, 8, 5, HotbarHex(TEXT("86A95E"))); break;
-	case 3: Rect(18, 23, 28, 9, Color); Rect(21, 34, 27, 10, Color); break;
-	case 4: Rect(21, 23, 22, 22, Color); Rect(17, 30, 30, 11, Color); break;
-	default: Rect(19, 25, 22, 15, Color); Rect(23, 21, 13, 23, Color); Rect(41, 21, 7, 23, Color); break;
+		FSlateBrush IconBrush;
+		IconBrush.SetResourceObject(ItemIcon);
+		FSlateDrawElement::MakeBox(Elements, ++Layer,
+			Geometry.ToPaintGeometry(FVector2D(40, 40) * Scale, FSlateLayoutTransform(FVector2D(12, 10) * Scale)), &IconBrush);
+	}
+	else
+	{
+		const FLinearColor Color = Definition.Color;
+		switch (Definition.PlaceholderIcon)
+		{
+		case 0: Rect(29, 16, 5, 34, HotbarHex(TEXT("735037"))); Rect(17, 14, 29, 8, Color); break;
+		case 1: Rect(20, 24, 24, 23, HotbarHex(TEXT("E5CE95"))); Rect(24, 20, 16, 5, HotbarHex(TEXT("765A36"))); Rect(30, 28, 4, 13, Color); break;
+		case 2: Rect(24, 25, 19, 17, Color); Rect(28, 42, 11, 6, Color); Rect(34, 16, 8, 5, HotbarHex(TEXT("86A95E"))); break;
+		case 3: Rect(18, 23, 28, 9, Color); Rect(21, 34, 27, 10, Color); break;
+		case 4: Rect(21, 23, 22, 22, Color); Rect(17, 30, 30, 11, Color); break;
+		default: Rect(19, 25, 22, 15, Color); Rect(23, 21, 13, 23, Color); Rect(41, 21, 7, 23, Color); break;
+		}
 	}
 	if (Definition.bInfiniteDurability)
 	{
@@ -195,5 +218,5 @@ void UPSHotbarSlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const FP
 	Super::NativeOnMouseEnter(Geometry, Event);
 	if (!Hotbar) return;
 	const FPSItemStack* Item = Hotbar->GetItem(Index);
-	SetToolTipText(Item ? PSItems::GetDefinition(*Item).Name : FText::FromString(TEXT("빈 단축 슬롯")));
+	SetToolTipText(Item ? Hotbar->GetItemDisplayName(*Item) : FText::FromString(TEXT("빈 단축 슬롯")));
 }

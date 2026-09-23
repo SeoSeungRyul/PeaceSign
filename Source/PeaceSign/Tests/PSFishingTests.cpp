@@ -7,6 +7,7 @@
 #include "../Inventory/PSInventoryComponent.h"
 #include "../Inventory/PSWorldItemActor.h"
 #include "../Skills/PSPlayerSkillComponent.h"
+#include "../Fishing/PSFishingJournalComponent.h"
 #include "../UI/PSFishingWidget.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/Image.h"
@@ -82,11 +83,15 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Outside world cannot fish"), Grid->CanFishFrom(FIntPoint(1000, 1000), Water));
 	TestEqual(TEXT("Water cannot be tilled"), Grid->TillCell(Water), EPSTileInteractionResult::NoEffect);
 	TestEqual(TEXT("Water cannot be planted"), Grid->PlantSeed(Water), EPSTileInteractionResult::NoEffect);
+	TestEqual(TEXT("Procedural water is a lake fishing location"), Grid->GetFishingLocationId(Water), 2);
+	TestEqual(TEXT("Land has no fishing location"), Grid->GetFishingLocationId(Shore), INDEX_NONE);
 
 	UDataTable* ImportedFishData = NewObject<UDataTable>(World);
 	ImportedFishData->RowStruct = FPSFishDefinition::StaticStruct();
-	const FString FishCsv = TEXT("---,Name,Difficulty,Season,Location,MinSize,MaxSize,Description,DescriptionPlus,IconID\n")
-		TEXT("010201,붕어,1,0,\"(1,2)\",10,40,기본 설명,최대 크기 설명,070201\n");
+	const FString FishCsv = TEXT("---,Name,Difficulty,Season,Location,MinSize,MaxSize,Description,DescriptionPlus,IconID,Weight\n")
+		TEXT("010201,붕어,1,0,\"(1,2)\",10,40,기본 설명,최대 크기 설명,070201,1\n")
+		TEXT("010202,여름물고기,1,1,\"(2)\",10,40,여름 설명,,070201,1000\n")
+		TEXT("010203,바다물고기,1,0,\"(0)\",10,40,바다 설명,,070201,1000\n");
 	const TArray<FString> FishImportProblems = ImportedFishData->CreateTableFromCSVString(FishCsv);
 	TestTrue(TEXT("Fishing CSV imports without schema errors"), FishImportProblems.IsEmpty());
 	const FPSFishDefinition* ImportedFish = ImportedFishData->FindRow<FPSFishDefinition>(TEXT("010201"), TEXT("Test"));
@@ -114,9 +119,18 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->FishIconDataTable = ImportedIconData;
 	Controller->SkillComponent->SaveSlotName = TEXT("FishingSkillTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	Controller->SkillComponent->bAutoSave = false;
+	Controller->FishingJournalComponent->SaveSlotName = TEXT("FishingJournalTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	Controller->FishingJournalComponent->bAutoSave = false;
 	Controller->FinishSpawning(FTransform::Identity);
 	Controller->InventoryComponent->ResetToDefaults();
 	Controller->SkillComponent->ResetSkills();
+	FName FilteredFishId;
+	Controller->SelectFishDefinition(FilteredFishId, 1, 2);
+	TestEqual(TEXT("Summer lake filter selects the matching row"), FilteredFishId, FName(TEXT("010202")));
+	Controller->SelectFishDefinition(FilteredFishId, 0, 0);
+	TestEqual(TEXT("Spring sea filter selects the matching row"), FilteredFishId, FName(TEXT("010203")));
+	Controller->SelectFishDefinition(FilteredFishId, 3, 2);
+	TestTrue(TEXT("No matching season leaves the fish ID empty"), FilteredFishId.IsNone());
 	TestEqual(TEXT("Starter fishing rod occupies hotbar slot three"), Controller->InventoryComponent->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
 	APawn* Pawn = World->SpawnActor<APawn>();
 	USceneComponent* Root = NewObject<USceneComponent>(Pawn);
@@ -130,6 +144,7 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Third hotbar slot equips rod"), Controller->GetEquipment(), EPSEquipment::FishingRod);
 	TestTrue(TEXT("Equipped rod works on adjacent water"), Controller->TryUseFishingRod(Water));
 	TestEqual(TEXT("Selected fish preserves its CSV row ID"), Controller->GetCurrentFishId(), FName(TEXT("010201")));
+	TestEqual(TEXT("Selection filters out wrong seasons and locations"), Controller->CurrentFish.Name.ToString(), FString(TEXT("붕어")));
 	TestNotNull(TEXT("Selected fish resolves its related icon row"), Controller->ResolveFishIcon(Controller->CurrentFish.IconID));
 	TestEqual(TEXT("Cast enters bite-wait state"), Controller->GetFishingState(), EPSFishingState::WaitingForBite);
 	for (int32 Frame = 0; Frame < 180; ++Frame) Controller->UpdateFishing(0.0f);
@@ -167,6 +182,27 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 		bCaughtFishKeepsRowId |= FishStack.ItemType == EPSItemType::Fish && FishStack.ItemId == TEXT("010201");
 	}
 	TestTrue(TEXT("Fishing reward preserves its DataTable row ID"), bCaughtFishKeepsRowId);
+	FPSItemStack CaughtFish;
+	for (int32 Index = 0; Index < Controller->InventoryComponent->GetUnlockedBagSlotCount(); ++Index)
+	{
+		const FPSItemStack Candidate = Controller->InventoryComponent->GetBagSlot(Index);
+		if (Candidate.ItemType == EPSItemType::Fish) { CaughtFish = Candidate; break; }
+	}
+	TestEqual(TEXT("Inventory resolves fish-specific names"), Controller->GetItemDisplayName(CaughtFish).ToString(), FString(TEXT("붕어")));
+	TestTrue(TEXT("Inventory resolves both fish descriptions"), Controller->GetItemDescription(CaughtFish).ToString().Contains(TEXT("최대 크기 설명")));
+	TestNotNull(TEXT("Inventory resolves the same icon table row"), Controller->GetItemIcon(CaughtFish));
+	const FPSFishJournalRecord FirstRecord = Controller->FishingJournalComponent->GetRecord(TEXT("010201"));
+	TestEqual(TEXT("Successful catch records one fish in the journal"), FirstRecord.TimesCaught, 1);
+	TestTrue(TEXT("Successful catch records its generated size"), FirstRecord.LargestSizeCm >= 10 && FirstRecord.LargestSizeCm <= 40);
+	Controller->FishingJournalComponent->RecordCatch(TEXT("010201"), 55, 2);
+	TestEqual(TEXT("Journal accumulates catch quantity"), Controller->FishingJournalComponent->GetRecord(TEXT("010201")).TimesCaught, 3);
+	TestEqual(TEXT("Journal keeps the largest size"), Controller->FishingJournalComponent->GetRecord(TEXT("010201")).LargestSizeCm, 55);
+	TestTrue(TEXT("Fishing journal saves"), Controller->FishingJournalComponent->SaveJournal());
+	UPSFishingJournalComponent* LoadedJournal = NewObject<UPSFishingJournalComponent>(Controller);
+	LoadedJournal->SaveSlotName = Controller->FishingJournalComponent->SaveSlotName;
+	LoadedJournal->bAutoSave = false;
+	TestTrue(TEXT("Fishing journal loads"), LoadedJournal->LoadJournal());
+	TestEqual(TEXT("Loaded journal restores the largest size"), LoadedJournal->GetRecord(TEXT("010201")).LargestSizeCm, 55);
 	TestEqual(TEXT("Successful catch awards two fishing XP"),
 		Controller->SkillComponent->GetSkillState(EPSPlayerSkillField::Fishing).Experience, 2);
 	Controller->UpdateFishing(2.0f);
@@ -211,8 +247,12 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Character->SetActorLocation(Grid->CellToWorldCenter(Shore));
 	TestTrue(TEXT("Character can begin fishing"), Controller->TryUseFishingRod(Water));
 	TestTrue(TEXT("Fishing locks character movement"), Character->IsMovementLocked());
+	TestTrue(TEXT("Movement input cancels bite waiting"), Controller->CancelFishingForMovementInput());
+	TestFalse(TEXT("Movement cancellation unlocks the character"), Character->IsMovementLocked());
+	TestTrue(TEXT("Character can cast again after moving"), Controller->TryUseFishingRod(Water));
 	Controller->BeginFishingBite();
 	Controller->BeginFishingMinigame();
+	TestFalse(TEXT("Movement cancellation does not consume minigame direction input"), Controller->CancelFishingForMovementInput());
 	Controller->FishingSequence = {EPSFishingDirection::Up};
 	Controller->FishingSequenceIndex = 0;
 	Controller->SubmitFishingDirection(EPSFishingDirection::Up);
@@ -293,6 +333,7 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	}
 	World->DestroyActor(Renderer);
 	UGameplayStatics::DeleteGameInSlot(Grid->SaveSlotName, 0);
+	UGameplayStatics::DeleteGameInSlot(Controller->FishingJournalComponent->SaveSlotName, 0);
 	GEngine->DestroyWorldContext(World);
 	World->DestroyWorld(false);
 	return true;

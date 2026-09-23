@@ -6,6 +6,7 @@
 #include "PSHotbarWidget.generated.h"
 
 class UPSHotbarWidget;
+class UTexture2D;
 
 UCLASS()
 class PEACESIGN_API UPSHotbarSlotWidget : public UUserWidget
@@ -35,6 +36,8 @@ public:
 	const FPSItemStack* GetItem(int32 Index) const;
 	bool IsSelected(int32 Index) const;
 	bool MoveItem(EPSInventoryArea FromArea, int32 FromIndex, int32 ToIndex);
+	FText GetItemDisplayName(const FPSItemStack& Item) const;
+	UTexture2D* GetItemIcon(const FPSItemStack& Item) const;
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
