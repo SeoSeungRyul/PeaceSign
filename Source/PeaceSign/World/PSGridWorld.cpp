@@ -205,6 +205,11 @@ bool APSGridWorld::CanFishFrom(const FIntPoint PlayerCell, const FIntPoint Water
 		&& GetGroundTile(WaterCell) == EPSTileType::Water;
 }
 
+int32 APSGridWorld::GetFishingLocationId(const FIntPoint WaterCell) const
+{
+	return GetGroundTile(WaterCell) == EPSTileType::Water ? static_cast<int32>(FishingLocation) : INDEX_NONE;
+}
+
 EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 {
 	switch (GetGroundTile(Cell))

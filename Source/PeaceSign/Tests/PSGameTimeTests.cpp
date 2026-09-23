@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
 #include "../Time/PSGameClockState.h"
+#include "../Time/PSGameTimeSubsystem.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPSGameTimeTest, "PeaceSign.Time.Clock", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FPSGameTimeTest::RunTest(const FString& Parameters)
@@ -45,6 +46,15 @@ bool FPSGameTimeTest::RunTest(const FString& Parameters)
 	RestoredClock.AdvanceHalfHours(12);
 	TestEqual(TEXT("Six-hour skip advances twelve half-hours"), RestoredClock.GetMinuteOfDay(), 780);
 	TestEqual(TEXT("Six-hour skip preserves partial-step time"), RestoredClock.RemainingSeconds, 0.0);
+	TestEqual(TEXT("Day one is spring"), UPSGameTimeSubsystem::GetSeasonIndexForDay(1), 0);
+	TestEqual(TEXT("Day 28 remains spring"), UPSGameTimeSubsystem::GetSeasonIndexForDay(28), 0);
+	TestEqual(TEXT("Day 29 starts summer"), UPSGameTimeSubsystem::GetSeasonIndexForDay(29), 1);
+	TestEqual(TEXT("Seasons wrap after 112 days"), UPSGameTimeSubsystem::GetSeasonIndexForDay(113), 0);
+	TestEqual(TEXT("Season day resets at the boundary"), UPSGameTimeSubsystem::GetDayOfSeasonForDay(29), 1);
+	FPSGameClockState SeasonClock;
+	SeasonClock.AdvanceHalfHours(28 * FPSGameClockState::StepsPerDay);
+	TestEqual(TEXT("Advancing 28 days preserves the time of day"), SeasonClock.GetMinuteOfDay(), 360);
+	TestEqual(TEXT("Advancing 28 days reaches the next season"), UPSGameTimeSubsystem::GetSeasonIndexForDay(SeasonClock.Day), 1);
 	return true;
 }
 #endif

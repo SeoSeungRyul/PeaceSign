@@ -10,6 +10,7 @@
 #include "Inventory/PSInventoryComponent.h"
 #include "Inventory/PSWorldItemActor.h"
 #include "Skills/PSPlayerSkillComponent.h"
+#include "Fishing/PSFishingJournalComponent.h"
 #include "PSPlayerCharacter.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Time/PSGameTimeSubsystem.h"
@@ -102,6 +103,7 @@ APSPlayerController::APSPlayerController()
 {
 	InventoryComponent = CreateDefaultSubobject<UPSInventoryComponent>(TEXT("InventoryComponent"));
 	SkillComponent = CreateDefaultSubobject<UPSPlayerSkillComponent>(TEXT("SkillComponent"));
+	FishingJournalComponent = CreateDefaultSubobject<UPSFishingJournalComponent>(TEXT("FishingJournalComponent"));
 	HotbarMappingContext = CreateDefaultSubobject<UInputMappingContext>(TEXT("IMC_Hotbar"));
 	HotbarSlotActions.Reset();
 	const FKey HotbarKeys[] = {EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
@@ -271,6 +273,7 @@ void APSPlayerController::SetupInputComponent()
 
 	// R is a development-only world reset shortcut and is intentionally not part of the gameplay IA set.
 	InputComponent->BindKey(EKeys::R, IE_Pressed, this, &APSPlayerController::HandleResetWorld);
+	InputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this, &APSPlayerController::HandleAdvanceSeason);
 	InputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this, &APSPlayerController::HandleAdvanceTime);
 	InputComponent->BindKey(EKeys::W, IE_Pressed, this, &APSPlayerController::HandleFishingUp);
 	InputComponent->BindKey(EKeys::A, IE_Pressed, this, &APSPlayerController::HandleFishingLeft);
@@ -501,6 +504,15 @@ bool APSPlayerController::TryUseFishingRod(const FIntPoint WaterCell)
 		|| !GridWorld->CanFishFrom(GridWorld->WorldToCell(PlayerPawn->GetActorLocation()), WaterCell)) return false;
 	const FPSItemStack* Rod = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
 	if (!Rod || Rod->ItemType != EPSItemType::FishingRod) return false;
+	const UPSGameTimeSubsystem* GameTime = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr;
+	const int32 Season = GameTime ? GameTime->GetSeasonIndex() : 0;
+	const int32 LocationId = GridWorld->GetFishingLocationId(WaterCell);
+	CurrentFish = SelectFishDefinition(CurrentFishId, Season, LocationId);
+	if (CurrentFishId.IsNone())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No fish is available for season %d at location %d."), Season, LocationId);
+		return false;
+	}
 	const FPSItemDefinition& RodDefinition = PSItems::GetDefinition(*Rod);
 	FishingMinigameTimeBonus = RodDefinition.FishingTimeBonus;
 	FishingExtraFishChance = RodDefinition.ExtraFishChance;
@@ -511,7 +523,6 @@ bool APSPlayerController::TryUseFishingRod(const FIntPoint WaterCell)
 	FishingCell = WaterCell;
 	FishingPawn = GetPawn();
 	FishingStartLocation = PlayerPawn->GetActorLocation();
-	CurrentFish = SelectFishDefinition(CurrentFishId);
 	CurrentFishIcon = nullptr;
 	CurrentFishSizeCm = 0;
 	FishingSequence.Reset();
@@ -630,10 +641,12 @@ void APSPlayerController::HandleFishingLeft() { SubmitFishingDirection(EPSFishin
 void APSPlayerController::HandleFishingDown() { SubmitFishingDirection(EPSFishingDirection::Down); }
 void APSPlayerController::HandleFishingRight() { SubmitFishingDirection(EPSFishingDirection::Right); }
 
-FPSFishDefinition APSPlayerController::SelectFishDefinition(FName& OutFishId) const
+FPSFishDefinition APSPlayerController::SelectFishDefinition(FName& OutFishId, const int32 Season, const int32 LocationId) const
 {
+	OutFishId = NAME_None;
 	TArray<FPSFishDefinition> Fish;
 	TArray<FName> FishIds;
+	bool bHasUsableTableRows = false;
 	if (FishDataTable)
 	{
 		if (FishDataTable->GetRowStruct() != FPSFishDefinition::StaticStruct())
@@ -646,16 +659,23 @@ FPSFishDefinition APSPlayerController::SelectFishDefinition(FName& OutFishId) co
 			{
 				if (!Pair.Value) continue;
 				FPSFishDefinition Entry = *reinterpret_cast<const FPSFishDefinition*>(Pair.Value);
-				if (Entry.IsUsable())
+				const bool bAvailableNow = Entry.Season == Season
+					&& (Entry.Location.IsEmpty() || Entry.Location.Contains(LocationId));
+				bHasUsableTableRows |= Entry.IsUsable();
+				if (Entry.IsUsable() && bAvailableNow)
 				{
 					FishIds.Add(Pair.Key);
 					Fish.Add(MoveTemp(Entry));
 				}
-				else UE_LOG(LogTemp, Warning, TEXT("Ignoring invalid fish row: %s"), *Pair.Key.ToString());
+				else if (!Entry.IsUsable()) UE_LOG(LogTemp, Warning, TEXT("Ignoring invalid fish row: %s"), *Pair.Key.ToString());
 			}
 		}
 	}
-	if (Fish.IsEmpty()) Fish = GetFallbackFish(FishIds);
+	if (Fish.IsEmpty())
+	{
+		if (bHasUsableTableRows) return FPSFishDefinition();
+		Fish = GetFallbackFish(FishIds);
+	}
 	float TotalWeight = 0.0f;
 	for (const FPSFishDefinition& Entry : Fish) TotalWeight += FMath::Max(0.0f, Entry.Weight);
 	if (TotalWeight <= 0.0f)
@@ -682,9 +702,62 @@ UTexture2D* APSPlayerController::ResolveFishIcon(const FName IconID) const
 {
 	if (!FishIconDataTable || IconID.IsNone()
 		|| FishIconDataTable->GetRowStruct() != FPSIconDefinition::StaticStruct()) return nullptr;
+	if (const TWeakObjectPtr<UTexture2D>* Cached = FishIconCache.Find(IconID))
+		if (Cached->IsValid()) return Cached->Get();
 	const FPSIconDefinition* Icon = FishIconDataTable->FindRow<FPSIconDefinition>(
 		IconID, TEXT("Fishing icon lookup"), false);
-	return Icon ? Icon->Image.LoadSynchronous() : nullptr;
+	UTexture2D* Texture = Icon ? Icon->Image.LoadSynchronous() : nullptr;
+	if (Texture) FishIconCache.Add(IconID, Texture);
+	return Texture;
+}
+
+const FPSFishDefinition* APSPlayerController::FindFishDefinition(const FName FishId) const
+{
+	if (!FishDataTable || FishId.IsNone() || FishDataTable->GetRowStruct() != FPSFishDefinition::StaticStruct()) return nullptr;
+	return FishDataTable->FindRow<FPSFishDefinition>(FishId, TEXT("Fishing item lookup"), false);
+}
+
+FText APSPlayerController::GetItemDisplayName(const FPSItemStack& Item) const
+{
+	if (Item.ItemType == EPSItemType::Fish)
+		if (const FPSFishDefinition* Fish = FindFishDefinition(Item.ItemId)) return Fish->Name;
+	return PSItems::GetDefinition(Item).Name;
+}
+
+FText APSPlayerController::GetItemDescription(const FPSItemStack& Item) const
+{
+	if (Item.ItemType != EPSItemType::Fish) return PSItems::GetDefinition(Item).Description;
+	const FPSFishDefinition* Fish = FindFishDefinition(Item.ItemId);
+	if (!Fish) return PSItems::GetDefinition(Item).Description;
+	FString Text = Fish->Description.ToString();
+	if (!Fish->DescriptionPlus.IsEmpty())
+	{
+		if (!Text.IsEmpty()) Text += TEXT("\n\n");
+		Text += Fish->DescriptionPlus.ToString();
+	}
+	if (FishingJournalComponent)
+	{
+		const FPSFishJournalRecord Record = FishingJournalComponent->GetRecord(Item.ItemId);
+		if (Record.IsDiscovered())
+		{
+			Text += FString::Printf(TEXT("\n\n포획 기록  %d마리\n최대 크기  %dcm"), Record.TimesCaught, Record.LargestSizeCm);
+		}
+	}
+	return FText::FromString(Text);
+}
+
+UTexture2D* APSPlayerController::GetItemIcon(const FPSItemStack& Item) const
+{
+	if (Item.ItemType != EPSItemType::Fish) return nullptr;
+	const FPSFishDefinition* Fish = FindFishDefinition(Item.ItemId);
+	return Fish ? ResolveFishIcon(Fish->IconID) : nullptr;
+}
+
+bool APSPlayerController::CancelFishingForMovementInput()
+{
+	if (FishingState != EPSFishingState::WaitingForBite && FishingState != EPSFishingState::BiteWindow) return false;
+	StopFishing(true);
+	return true;
 }
 
 void APSPlayerController::CompleteFishing(const bool bSuccess)
@@ -698,6 +771,7 @@ void APSPlayerController::CompleteFishing(const bool bSuccess)
 		const int32 RewardQuantity = 1 + (FMath::FRand() < FishingExtraFishChance ? 1 : 0);
 		if (!InventoryComponent || !InventoryComponent->AddItemVariant(
 			EPSItemType::Fish, CurrentFishId, RewardQuantity)) DropFishingReward(RewardQuantity);
+		if (FishingJournalComponent) FishingJournalComponent->RecordCatch(CurrentFishId, CurrentFishSizeCm, RewardQuantity);
 		if (SkillComponent) SkillComponent->AddExperience(EPSPlayerSkillField::Fishing, 2);
 		FishingState = EPSFishingState::Success;
 		FishingStateDuration = 1.5f;
@@ -893,6 +967,15 @@ void APSPlayerController::HandleAdvanceTime()
 	{
 		GameTime->AdvanceGameHours(6);
 		if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Cyan, TEXT("Game time advanced by 6 hours"));
+	}
+}
+
+void APSPlayerController::HandleAdvanceSeason()
+{
+	if (UPSGameTimeSubsystem* GameTime = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr)
+	{
+		GameTime->AdvanceGameDays(28);
+		if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Cyan, TEXT("Game season advanced by 28 days"));
 	}
 }
 

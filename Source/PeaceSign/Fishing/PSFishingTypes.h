@@ -26,6 +26,28 @@ enum class EPSFishingDirection : uint8
 	Right
 };
 
+UENUM(BlueprintType)
+enum class EPSFishingLocation : uint8
+{
+	Sea = 0,
+	River = 1,
+	Lake = 2
+};
+
+USTRUCT(BlueprintType)
+struct FPSFishJournalRecord
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame)
+	int32 TimesCaught = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame)
+	int32 LargestSizeCm = 0;
+
+	bool IsDiscovered() const { return TimesCaught > 0; }
+};
+
 USTRUCT(BlueprintType)
 struct FPSFishDefinition : public FTableRowBase
 {

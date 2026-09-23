@@ -178,16 +178,37 @@ void UPSInventoryWidget::SelectItem(int32 Index)
 	if (!DetailName) return;
 	const auto* Item = GetItem(Index);
 	const FPSItemDefinition& Definition = Item ? PSItems::GetDefinition(*Item) : PSItems::GetDefinition(EPSItemType::None);
-	DetailName->SetText(Definition.Name);
+	DetailName->SetText(Item ? GetItemDisplayName(*Item) : Definition.Name);
 	if (Item && Definition.bInfiniteDurability) DetailCount->SetText(FText::FromString(TEXT("내구도   무한")));
 	else if (Item && Definition.MaxDurability > 0) DetailCount->SetText(FText::FromString(
 		FString::Printf(TEXT("내구도   %d / %d"), Item->CurrentDurability, Definition.MaxDurability)));
 	else DetailCount->SetText(Item ? FText::FromString(FString::Printf(TEXT("보유 수량   %d"), Item->Quantity)) : FText::GetEmpty());
-	DetailDescription->SetText(Definition.Description);
+	DetailDescription->SetText(Item ? GetItemDescription(*Item) : Definition.Description);
 	int32 Occupied = 0;
 	const int32 Unlocked = InventoryComponent ? InventoryComponent->GetUnlockedBagSlotCount() : 0;
 	for (int32 ItemIndex = 0; ItemIndex < Unlocked; ++ItemIndex) Occupied += GetItem(ItemIndex) ? 1 : 0;
 	CapacityLabel->SetText(FText::FromString(FString::Printf(TEXT("가방   /   1단계                                      %d / %d칸 사용"), Occupied, Unlocked)));
+}
+
+FText UPSInventoryWidget::GetItemDisplayName(const FPSItemStack& Item) const
+{
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	return Controller ? Controller->GetItemDisplayName(Item) : PSItems::GetDefinition(Item).Name;
+}
+
+FText UPSInventoryWidget::GetItemDescription(const FPSItemStack& Item) const
+{
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	return Controller ? Controller->GetItemDescription(Item) : PSItems::GetDefinition(Item).Description;
+}
+
+UTexture2D* UPSInventoryWidget::GetItemIcon(const FPSItemStack& Item) const
+{
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	if (Controller)
+		if (UTexture2D* FishIcon = Controller->GetItemIcon(Item)) return FishIcon;
+	const TObjectPtr<UTexture2D>* IconTexture = ItemIcons.Find(Item.ItemType);
+	return IconTexture ? IconTexture->Get() : nullptr;
 }
 
 void UPSInventoryWidget::RefreshInventory()
@@ -253,11 +274,11 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 	const auto* Item = Inventory->GetItem(Index);
 	if (!Item) return Layer;
 	const FPSItemDefinition& Definition = PSItems::GetDefinition(*Item);
-	const TObjectPtr<UTexture2D>* IconTexture = Inventory->ItemIcons.Find(Item->ItemType);
-	if (IconTexture && IconTexture->Get())
+	UTexture2D* IconTexture = Inventory->GetItemIcon(*Item);
+	if (IconTexture)
 	{
 		FSlateBrush IconBrush;
-		IconBrush.SetResourceObject(IconTexture->Get());
+		IconBrush.SetResourceObject(IconTexture);
 		FSlateDrawElement::MakeBox(Elements, ++Layer, Geometry.ToPaintGeometry(FVector2D(40, 40) * Scale, FSlateLayoutTransform(FVector2D(12, 10) * Scale)), &IconBrush);
 	}
 	else
@@ -341,7 +362,7 @@ void UPSInventorySlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const
 	if (Inventory)
 	{
 		const auto* Item = Inventory->GetItem(Index);
-		SetToolTipText(Item ? PSItems::GetDefinition(*Item).Name : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
+		SetToolTipText(Item ? Inventory->GetItemDisplayName(*Item) : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
 	}
 }
 

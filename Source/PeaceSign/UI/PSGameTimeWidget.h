@@ -18,6 +18,7 @@ protected:
 private:
 	UFUNCTION() void RefreshClock();
 	// UI
+	UPROPERTY(Transient) TObjectPtr<UTextBlock> SeasonLabel;
 	UPROPERTY(Transient) TObjectPtr<UTextBlock> TimeLabel;
 	UPROPERTY(Transient) TObjectPtr<UPSGameTimeSubsystem> GameTime;
 };

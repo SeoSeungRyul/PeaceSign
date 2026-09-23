@@ -14,6 +14,7 @@ class UPSInventoryWidget;
 class UPSHotbarWidget;
 class UPSInventoryComponent;
 class UPSPlayerSkillComponent;
+class UPSFishingJournalComponent;
 class UPSFishingWidget;
 class UDataTable;
 class UInputAction;
@@ -21,6 +22,7 @@ class UInputMappingContext;
 class UTexture2D;
 class APSGridWorld;
 struct FInputActionValue;
+struct FPSItemStack;
 enum class EPSTileInteractionResult : uint8;
 
 /** Owns local-player input modes and mapping contexts. */
@@ -41,6 +43,8 @@ public:
 	UPSInventoryComponent* GetInventoryComponent() const { return InventoryComponent; }
 	UFUNCTION(BlueprintPure, Category = "Skills")
 	UPSPlayerSkillComponent* GetSkillComponent() const { return SkillComponent; }
+	UFUNCTION(BlueprintPure, Category = "Fishing|Journal")
+	UPSFishingJournalComponent* GetFishingJournalComponent() const { return FishingJournalComponent; }
 	UFUNCTION(BlueprintCallable, Category = "Inventory|Hotbar")
 	void SelectHotbarSlot(int32 SlotIndex);
 	UFUNCTION(BlueprintPure, Category = "Inventory|Hotbar")
@@ -59,6 +63,12 @@ public:
 	UTexture2D* GetCurrentFishIcon() const { return CurrentFishIcon; }
 	UFUNCTION(BlueprintPure, Category = "Fishing")
 	FName GetCurrentFishId() const { return CurrentFishId; }
+	/** Waiting/bite states end on movement input. Minigame direction input remains active. */
+	bool CancelFishingForMovementInput();
+	const FPSFishDefinition* FindFishDefinition(FName FishId) const;
+	FText GetItemDisplayName(const FPSItemStack& Item) const;
+	FText GetItemDescription(const FPSItemStack& Item) const;
+	UTexture2D* GetItemIcon(const FPSItemStack& Item) const;
 
 protected:
 	virtual void BeginPlay() override;
@@ -152,7 +162,7 @@ private:
 	void SetFishingMovementLocked(bool bLocked);
 	void RefreshFishingWidget();
 	void GenerateFishingSequence();
-	FPSFishDefinition SelectFishDefinition(FName& OutFishId) const;
+	FPSFishDefinition SelectFishDefinition(FName& OutFishId, int32 Season, int32 LocationId) const;
 	UTexture2D* ResolveFishIcon(FName IconID) const;
 	void DropFishingReward(int32 Quantity = 1);
 	void HandleFishingUp();
@@ -171,6 +181,7 @@ private:
 	FName CurrentFishId = NAME_None;
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> CurrentFishIcon;
+	mutable TMap<FName, TWeakObjectPtr<UTexture2D>> FishIconCache;
 	int32 CurrentFishSizeCm = 0;
 	float FishingMinigameTimeBonus = 0.0f;
 	float FishingExtraFishChance = 0.0f;
@@ -195,6 +206,8 @@ private:
 	TObjectPtr<UPSInventoryComponent> InventoryComponent;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Skills", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UPSPlayerSkillComponent> SkillComponent;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Fishing|Journal", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UPSFishingJournalComponent> FishingJournalComponent;
 	UPROPERTY(Transient)
 	TObjectPtr<UInputMappingContext> HotbarMappingContext;
 	UPROPERTY(Transient)
@@ -213,6 +226,7 @@ private:
 	void HandleCraft();
 	void HandleResetWorld();
 	void HandleAdvanceTime();
+	void HandleAdvanceSeason();
 
 	UPROPERTY(Transient)
 	TObjectPtr<APSGridWorld> GridWorld;

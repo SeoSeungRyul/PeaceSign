@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "../Fishing/PSFishingTypes.h"
 #include "PSTileTypes.h"
 #include "PSGridWorld.generated.h"
 
@@ -32,6 +33,10 @@ public:
 	// Cast from land up to two cells in a straight line or one cell diagonally.
 	UFUNCTION(BlueprintPure, Category = "Fishing")
 	bool CanFishFrom(FIntPoint PlayerCell, FIntPoint WaterCell) const;
+
+	/** 0=바다, 1=강, 2=호수. 물이 아닌 칸은 INDEX_NONE을 반환한다. */
+	UFUNCTION(BlueprintPure, Category = "Fishing")
+	int32 GetFishingLocationId(FIntPoint WaterCell) const;
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSCropType GetCropType(FIntPoint Cell) const;
@@ -87,6 +92,10 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World")
 	int32 WorldSeed = 1337;
+
+	/** 이 Grid World의 물 타일에 적용할 낚시 장소 ID. 현재 절차 생성 물은 호수다. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Fishing")
+	EPSFishingLocation FishingLocation = EPSFishingLocation::Lake;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Save")
 	FString SaveSlotName = TEXT("PeaceSignWorld");

@@ -2,6 +2,7 @@
 
 #include "PSPlayerCharacter.h"
 #include "PSPlayerStatsComponent.h"
+#include "PSPlayerController.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -257,8 +258,16 @@ void APSPlayerCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputC
 
 void APSPlayerCharacter::Move(const FInputActionValue& Value)
 {
-	if (bMovementLocked) return;
 	const FVector2D MovementInput = Value.Get<FVector2D>();
+	if (bMovementLocked)
+	{
+		if (!MovementInput.IsNearlyZero())
+		{
+			if (APSPlayerController* PlayerController = Cast<APSPlayerController>(GetController()))
+				PlayerController->CancelFishingForMovementInput();
+		}
+		if (bMovementLocked) return;
+	}
 	CurrentMovementInput = MovementInput;
 	if (MovementInput.IsNearlyZero())
 	{

@@ -20,6 +20,14 @@ void UPSGameTimeSubsystem::AdvanceGameHours(const int32 Hours)
 	}
 }
 
+void UPSGameTimeSubsystem::AdvanceGameDays(const int32 Days)
+{
+	if (Days > 0 && Clock.AdvanceHalfHours(static_cast<int64>(Days) * FPSGameClockState::StepsPerDay))
+	{
+		OnClockChanged.Broadcast();
+	}
+}
+
 TStatId UPSGameTimeSubsystem::GetStatId() const
 {
 	RETURN_QUICK_DECLARE_CYCLE_STAT(UPSGameTimeSubsystem, STATGROUP_Tickables);
