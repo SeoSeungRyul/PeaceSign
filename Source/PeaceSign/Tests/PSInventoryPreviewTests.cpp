@@ -62,6 +62,9 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Starter fishing rod remains usable from hotbar slot three"), Inventory->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
 	TestEqual(TEXT("Starter rod is the wooden tier"), Inventory->GetHotbarSlot(2).ItemId, PSItemIds::WoodenFishingRod);
 	TestEqual(TEXT("Starter rod begins at full durability"), Inventory->GetHotbarSlot(2).CurrentDurability, 100);
+	TestEqual(TEXT("Starter stone pickaxe occupies hotbar slot four"), Inventory->GetHotbarSlot(3).ItemType, EPSItemType::Pickaxe);
+	TestEqual(TEXT("Starter pickaxe keeps its tier ID"), Inventory->GetHotbarSlot(3).ItemId, PSItemIds::StonePickaxe);
+	TestEqual(TEXT("Starter pickaxe begins at full durability"), Inventory->GetHotbarSlot(3).CurrentDurability, 100);
 	bool bDestroyed = false;
 	TestTrue(TEXT("Rod durability can be consumed"), Inventory->ConsumeHotbarDurability(2, 1, bDestroyed));
 	TestFalse(TEXT("A healthy rod is retained"), bDestroyed);
@@ -138,6 +141,7 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	for (int32 Index = 0; Index < UPSInventoryComponent::HotbarSlotCount; ++Index)
 		LegacySave->Slots[Index] = Inventory->HotbarSlots[Index];
 	LegacySave->Slots[2].Clear();
+	LegacySave->Slots[3].Clear();
 	LegacySave->UnlockedSlotCount = 10;
 	LegacySave->DataVersion = 0;
 	TestTrue(TEXT("Legacy inventory fixture saves"), UGameplayStatics::SaveGameToSlot(LegacySave, Inventory->SaveSlotName, 0));
@@ -146,7 +150,29 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Legacy fixed-key fishing migrates a rod to hotbar slot three"), LoadedInventory->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
 	TestEqual(TEXT("Legacy rod receives its default ID"), LoadedInventory->GetHotbarSlot(2).ItemId, PSItemIds::WoodenFishingRod);
 	TestEqual(TEXT("Legacy rod receives full durability"), LoadedInventory->GetHotbarSlot(2).CurrentDurability, 100);
+	TestEqual(TEXT("Legacy save receives a pickaxe in slot four"), LoadedInventory->GetHotbarSlot(3).ItemType, EPSItemType::Pickaxe);
 	TestTrue(TEXT("Legacy migration creates a separate empty bag"), LoadedInventory->GetBagSlot(0).IsEmpty());
+	UPSInventorySaveGame* OccupiedSlotSave = NewObject<UPSInventorySaveGame>();
+	OccupiedSlotSave->DataVersion = 3;
+	OccupiedSlotSave->HotbarSlots = Inventory->HotbarSlots;
+	OccupiedSlotSave->BagSlots = Inventory->BagSlots;
+	OccupiedSlotSave->UnlockedBagSlotCount = 10;
+	OccupiedSlotSave->HotbarSlots[3].ItemType = EPSItemType::Wood;
+	OccupiedSlotSave->HotbarSlots[3].ItemId = NAME_None;
+	OccupiedSlotSave->HotbarSlots[3].Quantity = 1;
+	OccupiedSlotSave->HotbarSlots[3].CurrentDurability = INDEX_NONE;
+	for (int32 Index = 4; Index < OccupiedSlotSave->HotbarSlots.Num(); ++Index)
+	{
+		OccupiedSlotSave->HotbarSlots[Index].ItemType = EPSItemType::Wood;
+		OccupiedSlotSave->HotbarSlots[Index].Quantity = 1;
+	}
+	TestTrue(TEXT("Occupied slot migration fixture saves"),
+		UGameplayStatics::SaveGameToSlot(OccupiedSlotSave, Inventory->SaveSlotName, 0));
+	TestTrue(TEXT("Occupied slot migration reloads"), LoadedInventory->LoadInventory());
+	TestEqual(TEXT("Migration preserves an occupied fourth hotbar slot"),
+		LoadedInventory->GetHotbarSlot(3).ItemType, EPSItemType::Wood);
+	TestEqual(TEXT("Migration falls back to the first empty bag slot"),
+		LoadedInventory->GetBagSlot(0).ItemType, EPSItemType::Pickaxe);
 	UGameplayStatics::DeleteGameInSlot(Inventory->SaveSlotName, 0);
 
 	// Restore the initial layout before taking visual review images.

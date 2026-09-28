@@ -150,6 +150,7 @@ private:
 	friend class FPSFishingTest;
 	friend class FPSFishingFlowTest;
 	friend class FPSFarmingInventoryTest;
+	friend class FPSMiningTest;
 	friend class FPSGameplayInputMappingTest;
 	void HandleFishingRod();
 	bool AreFishingControlsLocked() const;
@@ -165,6 +166,7 @@ private:
 	FPSFishDefinition SelectFishDefinition(FName& OutFishId, int32 Season, int32 LocationId) const;
 	UTexture2D* ResolveFishIcon(FName IconID) const;
 	void DropFishingReward(int32 Quantity = 1);
+	void DropStoneReward(FIntPoint Cell);
 	void HandleFishingUp();
 	void HandleFishingLeft();
 	void HandleFishingDown();

@@ -122,6 +122,8 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 	Controller->FinishSpawning(FTransform::Identity);
 	Controller->InventoryComponent->ResetToDefaults();
 	Controller->SkillComponent->ResetSkills();
+	Controller->SelectHotbarSlot(3);
+	TestEqual(TEXT("Slot four equips its starter pickaxe"), Controller->GetEquipment(), EPSEquipment::Pickaxe);
 	TestEqual(TEXT("Controller instance has ten hotbar mappings"), Controller->HotbarMappingContext->GetMappings().Num(), 10);
 	for (const FEnhancedActionKeyMapping& Mapping : Controller->HotbarMappingContext->GetMappings())
 	{
@@ -143,10 +145,10 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 	Controller->SelectHotbarSlot(0);
 	TestEqual(TEXT("Slot one equips its hoe"), Controller->GetEquipment(), EPSEquipment::Hoe);
 	TestTrue(TEXT("Moving the selected hoe succeeds"), Controller->InventoryComponent->MoveItem(
-		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Hotbar, 3));
+		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Hotbar, 4));
 	TestEqual(TEXT("Empty selected slot becomes bare hands"), Controller->GetEquipment(), EPSEquipment::BareHands);
 	TestTrue(TEXT("Returning the hoe refreshes equipment"), Controller->InventoryComponent->MoveItem(
-		EPSInventoryArea::Hotbar, 3, EPSInventoryArea::Hotbar, 0));
+		EPSInventoryArea::Hotbar, 4, EPSInventoryArea::Hotbar, 0));
 	TestEqual(TEXT("Returned hoe equips again"), Controller->GetEquipment(), EPSEquipment::Hoe);
 
 	Controller->SelectHotbarSlot(1);

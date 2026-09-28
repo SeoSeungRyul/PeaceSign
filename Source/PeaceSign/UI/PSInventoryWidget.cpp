@@ -291,6 +291,7 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 		case 2: Rect(24, 25, 19, 17, C); Rect(28, 42, 11, 6, C); Rect(29, 17, 4, 10, Hex(TEXT("63884D"))); Rect(34, 16, 8, 5, Hex(TEXT("86A95E"))); break;
 		case 3: Rect(18, 23, 28, 9, C); Rect(21, 34, 27, 10, C); Rect(21, 26, 21, 2, Hex(TEXT("775136"))); Rect(24, 38, 20, 2, Hex(TEXT("775136"))); break;
 		case 4: Rect(21, 23, 22, 22, C); Rect(17, 30, 30, 11, C); Rect(25, 20, 13, 4, C); Rect(24, 26, 12, 4, Hex(TEXT("D3D6D8"))); break;
+		case 6: Rect(29, 18, 5, 34, Hex(TEXT("735037"))); Rect(15, 15, 34, 7, C); Rect(12, 18, 10, 5, C); break;
 		default: Rect(19, 25, 22, 15, C); Rect(23, 21, 13, 23, C); Rect(41, 21, 7, 23, C); Rect(21, 28, 3, 3, Hex(TEXT("243C3A"))); break;
 		}
 	}
