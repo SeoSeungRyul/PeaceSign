@@ -18,6 +18,7 @@ class PEACESIGN_API APSGridWorld : public AActor
 
 public:
 	APSGridWorld();
+	static constexpr int32 DefaultStoneHealth = 3;
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -29,6 +30,16 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSTileType GetGroundTile(FIntPoint Cell) const;
+
+	UFUNCTION(BlueprintPure, Category = "Mining")
+	int32 GetStoneHealth(FIntPoint Cell) const;
+
+	/** Mine from land up to two cells straight or one cell diagonally. */
+	UFUNCTION(BlueprintPure, Category = "Mining")
+	bool CanMineFrom(FIntPoint PlayerCell, FIntPoint StoneCell) const;
+
+	UFUNCTION(BlueprintCallable, Category = "Mining")
+	EPSTileInteractionResult MineCell(FIntPoint Cell, int32 Damage = 1);
 
 	// Cast from land up to two cells in a straight line or one cell diagonally.
 	UFUNCTION(BlueprintPure, Category = "Fishing")
@@ -115,6 +126,7 @@ private:
 	friend class FPSCropGrowthTest;
 	friend class FPSFishingTest;
 	friend class FPSFarmingInventoryTest;
+	friend class FPSMiningTest;
 	bool IsLakeCell(FIntPoint Cell) const;
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();

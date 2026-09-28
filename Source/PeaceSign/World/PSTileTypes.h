@@ -22,6 +22,7 @@ enum class EPSTileInteractionResult : uint8
 	InvalidCell,
 	NoEffect,
 	Tilled,
+	StoneDamaged,
 	Mined,
 	Planted,
 	Harvested,
@@ -43,6 +44,10 @@ struct FPSTileCell
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSTileType GroundType = EPSTileType::Grass;
+
+	/** Remaining durability for a stone tile. Zero is also used by legacy, uninitialized stone saves. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "0"))
+	int32 StoneHealth = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSCropType CropType = EPSCropType::None;

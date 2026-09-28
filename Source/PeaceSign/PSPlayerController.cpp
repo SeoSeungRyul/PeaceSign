@@ -80,6 +80,8 @@ namespace
 		{
 		case EPSTileInteractionResult::Tilled:
 			return TEXT("Soil tilled");
+		case EPSTileInteractionResult::StoneDamaged:
+			return TEXT("Stone damaged");
 		case EPSTileInteractionResult::Mined:
 			return TEXT("Stone mined into dirt");
 		case EPSTileInteractionResult::Planted:
@@ -297,14 +299,23 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 	const EPSTileType TileType = GridWorld->GetGroundTile(Cell);
 	const FVector CellCenter = GridWorld->CellToWorldCenter(Cell);
 	const float HalfCell = GridWorld->GetCellSize() * 0.48f;
+	const bool bStoneOutOfRange = TileType == EPSTileType::Stone && GetPawn()
+		&& !GridWorld->CanMineFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), Cell);
+	FColor HoverColor = GetTileDebugColor(TileType);
+	if (Equipment == EPSEquipment::FishingRod)
+	{
+		HoverColor = GetPawn() && GridWorld->CanFishFrom(
+			GridWorld->WorldToCell(GetPawn()->GetActorLocation()), Cell) ? FColor::Green : FColor::Red;
+	}
+	else if (bStoneOutOfRange)
+	{
+		HoverColor = FColor::Red;
+	}
 	DrawDebugBox(
 		GetWorld(),
 		CellCenter,
 		FVector(HalfCell, HalfCell, 1.0f),
-		Equipment == EPSEquipment::FishingRod
-			? (GetPawn() && GridWorld->CanFishFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), Cell)
-				? FColor::Green : FColor::Red)
-			: GetTileDebugColor(TileType),
+		HoverColor,
 		false,
 		0.0f,
 		0,
@@ -356,6 +367,13 @@ void APSPlayerController::HandleSpecialAttack()
 	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (TargetCell.IsSet())
 	{
+		if (GridWorld && GetPawn() && GridWorld->GetGroundTile(TargetCell.GetValue()) == EPSTileType::Stone
+			&& !GridWorld->CanMineFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), TargetCell.GetValue()))
+		{
+			if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Red,
+				TEXT("Stone is out of mining range"));
+			return;
+		}
 		const EPSTileInteractionResult Result = UseEquippedItemOnCell(TargetCell.GetValue());
 		if (Equipment == EPSEquipment::BareHands)
 		{
@@ -385,6 +403,16 @@ void APSPlayerController::HandleSpecialAttack()
 EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPoint Cell)
 {
 	if (!GridWorld) return EPSTileInteractionResult::InvalidCell;
+	if (GridWorld->GetGroundTile(Cell) == EPSTileType::Stone)
+	{
+		const EPSTileInteractionResult Result = GridWorld->MineCell(Cell, 1);
+		if (Result == EPSTileInteractionResult::Mined
+			&& (!InventoryComponent || !InventoryComponent->AddItem(EPSItemType::Stone, 1)))
+		{
+			DropStoneReward(Cell);
+		}
+		return Result;
+	}
 	switch (Equipment)
 	{
 	case EPSEquipment::BareHands:
@@ -467,6 +495,7 @@ void APSPlayerController::RefreshEquipmentFromHotbar()
 		case EPSItemType::Hoe: NewEquipment = EPSEquipment::Hoe; break;
 		case EPSItemType::TestSeed: NewEquipment = EPSEquipment::Seed; break;
 		case EPSItemType::FishingRod: NewEquipment = EPSEquipment::FishingRod; break;
+		case EPSItemType::Pickaxe: NewEquipment = EPSEquipment::Pickaxe; break;
 		default: NewEquipment = EPSEquipment::UnusableItem; break;
 		}
 	}
@@ -946,6 +975,10 @@ void APSPlayerController::HandleResetWorld()
 	if (bResetSucceeded)
 	{
 		StopFishing();
+		for (TActorIterator<APSWorldItemActor> It(GetWorld()); It; ++It)
+		{
+			It->Destroy();
+		}
 		SelectedHotbarSlot = INDEX_NONE;
 		if (InventoryComponent) InventoryComponent->ResetToDefaults();
 		HarvestedCropCount = 0;
@@ -968,6 +1001,20 @@ void APSPlayerController::HandleAdvanceTime()
 		GameTime->AdvanceGameHours(6);
 		if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Cyan, TEXT("Game time advanced by 6 hours"));
 	}
+}
+
+void APSPlayerController::DropStoneReward(const FIntPoint Cell)
+{
+	if (!GetWorld() || !GridWorld) return;
+	const FTransform SpawnTransform(FRotator::ZeroRotator, GridWorld->CellToWorldCenter(Cell) + FVector(0, 0, 20));
+	APSWorldItemActor* Drop = GetWorld()->SpawnActorDeferred<APSWorldItemActor>(
+		APSWorldItemActor::StaticClass(), SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!Drop) return;
+	FPSItemStack Stack;
+	Stack.ItemType = EPSItemType::Stone;
+	Stack.Quantity = 1;
+	Drop->InitializeItem(Stack);
+	Drop->FinishSpawning(SpawnTransform);
 }
 
 void APSPlayerController::HandleAdvanceSeason()

@@ -4,7 +4,7 @@
 
 namespace
 {
-	constexpr int32 CurrentInventorySaveVersion = 3;
+	constexpr int32 CurrentInventorySaveVersion = 4;
 
 	bool UsesCropId(const EPSItemType ItemType)
 	{
@@ -358,6 +358,10 @@ void UPSInventoryComponent::InitializeDefaults()
 	HotbarSlots[2].ItemId = PSItemIds::WoodenFishingRod;
 	HotbarSlots[2].Quantity = 1;
 	HotbarSlots[2].CurrentDurability = PSItems::GetDefinition(HotbarSlots[2]).MaxDurability;
+	HotbarSlots[3].ItemType = EPSItemType::Pickaxe;
+	HotbarSlots[3].ItemId = PSItemIds::StonePickaxe;
+	HotbarSlots[3].Quantity = 1;
+	HotbarSlots[3].CurrentDurability = PSItems::GetDefinition(HotbarSlots[3]).MaxDurability;
 }
 
 void UPSInventoryComponent::NotifyChanged()
@@ -419,6 +423,38 @@ bool UPSInventoryComponent::LoadInventory()
 		HotbarSlots[2].Quantity = 1;
 		HotbarSlots[2].CurrentDurability = PSItems::GetDefinition(HotbarSlots[2]).MaxDurability;
 		bMigrated = true;
+	}
+	if (Save->DataVersion < 4 && CountItem(EPSItemType::Pickaxe) == 0)
+	{
+		FPSItemStack Pickaxe;
+		Pickaxe.ItemType = EPSItemType::Pickaxe;
+		Pickaxe.ItemId = PSItemIds::StonePickaxe;
+		Pickaxe.Quantity = 1;
+		Pickaxe.CurrentDurability = PSItems::GetDefinition(Pickaxe).MaxDurability;
+		if (HotbarSlots[3].IsEmpty())
+		{
+			HotbarSlots[3] = Pickaxe;
+			bMigrated = true;
+		}
+		else
+		{
+			for (FPSItemStack& Slot : HotbarSlots)
+			{
+				if (!Slot.IsEmpty()) continue;
+				Slot = Pickaxe;
+				bMigrated = true;
+				break;
+			}
+			for (int32 Index = 0; !bMigrated && BagSlots.IsValidIndex(Index); ++Index)
+			{
+				if (!BagSlots[Index].IsEmpty()) continue;
+				BagSlots[Index] = Pickaxe;
+				UnlockedBagSlotCount = FMath::Max(UnlockedBagSlotCount, Index + 1);
+				bMigrated = true;
+			}
+			if (!bMigrated)
+				UE_LOG(LogTemp, Warning, TEXT("Starter pickaxe could not be added because every inventory slot is full."));
+		}
 	}
 	if (bLegacyDurability) bMigrated = true;
 	if (bMigrated && bAutoSave) SaveInventory();

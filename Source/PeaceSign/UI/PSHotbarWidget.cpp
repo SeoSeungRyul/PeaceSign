@@ -153,6 +153,7 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 		case 2: Rect(24, 25, 19, 17, Color); Rect(28, 42, 11, 6, Color); Rect(34, 16, 8, 5, HotbarHex(TEXT("86A95E"))); break;
 		case 3: Rect(18, 23, 28, 9, Color); Rect(21, 34, 27, 10, Color); break;
 		case 4: Rect(21, 23, 22, 22, Color); Rect(17, 30, 30, 11, Color); break;
+		case 6: Rect(29, 18, 5, 34, HotbarHex(TEXT("735037"))); Rect(15, 15, 34, 7, Color); Rect(12, 18, 10, 5, Color); break;
 		default: Rect(19, 25, 22, 15, Color); Rect(23, 21, 13, 23, Color); Rect(41, 21, 7, 23, Color); break;
 		}
 	}

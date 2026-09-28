@@ -30,6 +30,8 @@ const FPSItemDefinition& PSItems::GetDefinition(const EPSItemType ItemType, cons
 	static const FPSItemDefinition Wood = MakeDefinition(TEXT("목재"), TEXT("제작 재료\n건축과 제작에 사용하는 나무입니다."), 999, TEXT("C58A58"), 3);
 	static const FPSItemDefinition Stone = MakeDefinition(TEXT("돌"), TEXT("제작과 건축에 사용하는 돌입니다."), 999, TEXT("B4B9BF"), 4);
 	static const FPSItemDefinition Fish = MakeDefinition(TEXT("물고기"), TEXT("식량\n물에서 낚아 올린 작은 물고기입니다."), 999, TEXT("7CC5CF"), 5);
+	static const FPSItemDefinition StonePickaxe = MakeDefinition(
+		TEXT("돌 곡괭이"), TEXT("도구\n돌 블록을 채굴하는 임시 곡괭이입니다."), 1, TEXT("AAB0B7"), 6, 100);
 	// Durability values are tuning defaults until the item data sheet supplies final values.
 	static const FPSItemDefinition WoodenRod = MakeDefinition(TEXT("나무 낚싯대"), TEXT("도구\n낚시가 가능한 기본 낚싯대입니다."), 1, TEXT("B88951"), 5, 100);
 	static const FPSItemDefinition PlasticRod = MakeDefinition(TEXT("플라스틱 낚싯대"), TEXT("도구\n미니게임 제한시간이 2초 증가합니다."), 1, TEXT("E8D8B5"), 5, 100, 2.0f);
@@ -56,6 +58,7 @@ const FPSItemDefinition& PSItems::GetDefinition(const EPSItemType ItemType, cons
 		return WoodenRod;
 	case EPSItemType::FishingBait: return Bait;
 	case EPSItemType::FishingBobber: return Bobber;
+	case EPSItemType::Pickaxe: return StonePickaxe;
 	case EPSItemType::None:
 	default: return Empty;
 	}
@@ -73,7 +76,9 @@ const FPSItemDefinition& PSItems::GetDefinition(const FPSItemStack& Stack)
 
 FName PSItems::GetDefaultItemId(const EPSItemType ItemType)
 {
-	return ItemType == EPSItemType::FishingRod ? PSItemIds::WoodenFishingRod : NAME_None;
+	if (ItemType == EPSItemType::FishingRod) return PSItemIds::WoodenFishingRod;
+	if (ItemType == EPSItemType::Pickaxe) return PSItemIds::StonePickaxe;
+	return NAME_None;
 }
 
 bool PSItems::UsesDurability(const FPSItemStack& Stack)
@@ -84,5 +89,5 @@ bool PSItems::UsesDurability(const FPSItemStack& Stack)
 
 bool PSItems::IsValid(const EPSItemType ItemType)
 {
-	return ItemType > EPSItemType::None && ItemType <= EPSItemType::FishingBobber;
+	return ItemType > EPSItemType::None && ItemType <= EPSItemType::Pickaxe;
 }

@@ -15,7 +15,8 @@ enum class EPSItemType : uint8
 	Fish,
 	FishingRod,
 	FishingBait,
-	FishingBobber
+	FishingBobber,
+	Pickaxe
 };
 
 USTRUCT(BlueprintType)
@@ -60,6 +61,7 @@ struct FPSItemDefinition
 
 namespace PSItemIds
 {
+	inline const FName StonePickaxe(TEXT("Pickaxe.Stone"));
 	inline const FName WoodenFishingRod(TEXT("FishingRod.Wood"));
 	inline const FName PlasticFishingRod(TEXT("FishingRod.Plastic"));
 	inline const FName AluminumFishingRod(TEXT("FishingRod.Aluminum"));
