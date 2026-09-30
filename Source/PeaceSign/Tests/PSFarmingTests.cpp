@@ -88,12 +88,19 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	Renderer->Rebuild(Chunk, 2, 100.0f);
 	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
 	Renderer->GetComponents(Components);
-	TestEqual(TEXT("Ground and seed have renderers"), Components.Num(), 6);
+	TestEqual(TEXT("Ground, seed, and mineral types have renderers"), Components.Num(), 13);
+	const auto ExpectedInstances = [](const UHierarchicalInstancedStaticMeshComponent* Component)
+	{
+		const FName Name = Component->GetFName();
+		return Name == TEXT("GrassInstances") || Name == TEXT("DirtInstances")
+			|| Name == TEXT("StoneInstances") || Name == TEXT("TilledSoilInstances")
+			|| Name == TEXT("SeedInstances") ? 1 : 0;
+	};
 	for (auto* Component : Components)
-		TestEqual(TEXT("Each ground type renders one tile"), Component->GetInstanceCount(), Component->GetFName() == TEXT("WaterInstances") ? 0 : 1);
+		TestEqual(TEXT("Only populated ground types render one tile"), Component->GetInstanceCount(), ExpectedInstances(Component));
 	Renderer->Rebuild(Chunk, 2, 100.0f);
 	for (auto* Component : Components)
-		TestEqual(TEXT("Rebuilding does not duplicate tiles"), Component->GetInstanceCount(), Component->GetFName() == TEXT("WaterInstances") ? 0 : 1);
+		TestEqual(TEXT("Rebuilding does not duplicate tiles"), Component->GetInstanceCount(), ExpectedInstances(Component));
 	UGameplayStatics::DeleteGameInSlot(Slot, 0);
 	World->DestroyWorld(false);
 	return true;

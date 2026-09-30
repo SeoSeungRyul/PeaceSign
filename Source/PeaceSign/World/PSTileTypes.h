@@ -37,6 +37,36 @@ enum class EPSCropType : uint8
 	TestCrop
 };
 
+/** Optional ore embedded in a stone block. Plain stone uses None. */
+UENUM(BlueprintType)
+enum class EPSMineralType : uint8
+{
+	None,
+	Copper,
+	Iron,
+	Silver,
+	Gold,
+	Titanium,
+	Lumistone,
+	Asterium
+};
+
+USTRUCT(BlueprintType)
+struct FPSMineralSpawnRule
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	EPSMineralType MineralType = EPSMineralType::None;
+
+	/** The world is split into eight distance bands, numbered 0 through 7. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0", ClampMax = "7"))
+	int32 MinimumDistanceBand = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0"))
+	int32 Weight = 0;
+};
+
 USTRUCT(BlueprintType)
 struct FPSTileCell
 {
@@ -48,6 +78,9 @@ struct FPSTileCell
 	/** Remaining durability for a stone tile. Zero is also used by legacy, uninitialized stone saves. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "0"))
 	int32 StoneHealth = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	EPSMineralType MineralType = EPSMineralType::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSCropType CropType = EPSCropType::None;

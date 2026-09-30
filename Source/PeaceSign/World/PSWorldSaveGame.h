@@ -14,6 +14,9 @@ class PEACESIGN_API UPSWorldSaveGame : public USaveGame
 
 public:
 	UPROPERTY(SaveGame)
+	int32 DataVersion = 0;
+
+	UPROPERTY(SaveGame)
 	int32 WorldSeed = 1337;
 
 	// Reference for restoring crop ages when a new session's clock starts at 06:00.

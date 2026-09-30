@@ -28,6 +28,20 @@ APSTileChunkActor::APSTileChunkActor()
 
 	StoneInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("StoneInstances"));
 	StoneInstances->SetupAttachment(SceneRoot);
+	CopperOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("CopperOreInstances"));
+	CopperOreInstances->SetupAttachment(SceneRoot);
+	IronOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("IronOreInstances"));
+	IronOreInstances->SetupAttachment(SceneRoot);
+	SilverOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("SilverOreInstances"));
+	SilverOreInstances->SetupAttachment(SceneRoot);
+	GoldOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("GoldOreInstances"));
+	GoldOreInstances->SetupAttachment(SceneRoot);
+	TitaniumOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("TitaniumOreInstances"));
+	TitaniumOreInstances->SetupAttachment(SceneRoot);
+	LumistoneOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("LumistoneOreInstances"));
+	LumistoneOreInstances->SetupAttachment(SceneRoot);
+	AsteriumOreInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("AsteriumOreInstances"));
+	AsteriumOreInstances->SetupAttachment(SceneRoot);
 	WaterInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("WaterInstances"));
 	WaterInstances->SetupAttachment(SceneRoot);
 	SeedInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("SeedInstances"));
@@ -56,6 +70,13 @@ APSTileChunkActor::APSTileChunkActor()
 	ConfigureInstances(GrassInstances);
 	ConfigureInstances(DirtInstances);
 	ConfigureInstances(StoneInstances);
+	ConfigureInstances(CopperOreInstances);
+	ConfigureInstances(IronOreInstances);
+	ConfigureInstances(SilverOreInstances);
+	ConfigureInstances(GoldOreInstances);
+	ConfigureInstances(TitaniumOreInstances);
+	ConfigureInstances(LumistoneOreInstances);
+	ConfigureInstances(AsteriumOreInstances);
 	ConfigureInstances(WaterInstances);
 	ConfigureInstances(TilledSoilInstances);
 	ConfigureInstances(SeedInstances);
@@ -70,10 +91,17 @@ void APSTileChunkActor::OnConstruction(const FTransform& Transform)
 
 void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
 {
-	RebuildWaterCollision(ChunkData, ChunkSize, CellSize);
+	RebuildBlockingCollision(ChunkData, ChunkSize, CellSize);
 	GrassInstances->ClearInstances();
 	DirtInstances->ClearInstances();
 	StoneInstances->ClearInstances();
+	CopperOreInstances->ClearInstances();
+	IronOreInstances->ClearInstances();
+	SilverOreInstances->ClearInstances();
+	GoldOreInstances->ClearInstances();
+	TitaniumOreInstances->ClearInstances();
+	LumistoneOreInstances->ClearInstances();
+	AsteriumOreInstances->ClearInstances();
 	WaterInstances->ClearInstances();
 	TilledSoilInstances->ClearInstances();
 	SeedInstances->ClearInstances();
@@ -87,12 +115,26 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	TArray<FTransform> GrassTransforms;
 	TArray<FTransform> DirtTransforms;
 	TArray<FTransform> StoneTransforms;
+	TArray<FTransform> CopperOreTransforms;
+	TArray<FTransform> IronOreTransforms;
+	TArray<FTransform> SilverOreTransforms;
+	TArray<FTransform> GoldOreTransforms;
+	TArray<FTransform> TitaniumOreTransforms;
+	TArray<FTransform> LumistoneOreTransforms;
+	TArray<FTransform> AsteriumOreTransforms;
 	TArray<FTransform> WaterTransforms;
 	TArray<FTransform> TilledSoilTransforms;
 	TArray<FTransform> SeedTransforms;
 	GrassTransforms.Reserve(ChunkData.Cells.Num());
 	DirtTransforms.Reserve(ChunkData.Cells.Num());
 	StoneTransforms.Reserve(ChunkData.Cells.Num());
+	CopperOreTransforms.Reserve(ChunkData.Cells.Num());
+	IronOreTransforms.Reserve(ChunkData.Cells.Num());
+	SilverOreTransforms.Reserve(ChunkData.Cells.Num());
+	GoldOreTransforms.Reserve(ChunkData.Cells.Num());
+	TitaniumOreTransforms.Reserve(ChunkData.Cells.Num());
+	LumistoneOreTransforms.Reserve(ChunkData.Cells.Num());
+	AsteriumOreTransforms.Reserve(ChunkData.Cells.Num());
 	TilledSoilTransforms.Reserve(ChunkData.Cells.Num());
 	SeedTransforms.Reserve(ChunkData.Cells.Num());
 
@@ -114,7 +156,18 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 				TargetTransforms = &TilledSoilTransforms;
 				break;
 			case EPSTileType::Stone:
-				TargetTransforms = &StoneTransforms;
+				switch (Cell.MineralType)
+				{
+				case EPSMineralType::Copper: TargetTransforms = &CopperOreTransforms; break;
+				case EPSMineralType::Iron: TargetTransforms = &IronOreTransforms; break;
+				case EPSMineralType::Silver: TargetTransforms = &SilverOreTransforms; break;
+				case EPSMineralType::Gold: TargetTransforms = &GoldOreTransforms; break;
+				case EPSMineralType::Titanium: TargetTransforms = &TitaniumOreTransforms; break;
+				case EPSMineralType::Lumistone: TargetTransforms = &LumistoneOreTransforms; break;
+				case EPSMineralType::Asterium: TargetTransforms = &AsteriumOreTransforms; break;
+				case EPSMineralType::None:
+				default: TargetTransforms = &StoneTransforms; break;
+				}
 				break;
 			case EPSTileType::Water:
 				TargetTransforms = &WaterTransforms;
@@ -152,29 +205,40 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	GrassInstances->AddInstances(GrassTransforms, false, false, false);
 	DirtInstances->AddInstances(DirtTransforms, false, false, false);
 	StoneInstances->AddInstances(StoneTransforms, false, false, false);
+	CopperOreInstances->AddInstances(CopperOreTransforms, false, false, false);
+	IronOreInstances->AddInstances(IronOreTransforms, false, false, false);
+	SilverOreInstances->AddInstances(SilverOreTransforms, false, false, false);
+	GoldOreInstances->AddInstances(GoldOreTransforms, false, false, false);
+	TitaniumOreInstances->AddInstances(TitaniumOreTransforms, false, false, false);
+	LumistoneOreInstances->AddInstances(LumistoneOreTransforms, false, false, false);
+	AsteriumOreInstances->AddInstances(AsteriumOreTransforms, false, false, false);
 	WaterInstances->AddInstances(WaterTransforms, false, false, false);
 	TilledSoilInstances->AddInstances(TilledSoilTransforms, false, false, false);
 	SeedInstances->AddInstances(SeedTransforms, false, false, false);
 }
 
-void APSTileChunkActor::RebuildWaterCollision(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
+void APSTileChunkActor::RebuildBlockingCollision(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
 {
-	for (UBoxComponent* Blocker : WaterBlockers)
+	for (UBoxComponent* Blocker : BlockingTileColliders)
 	{
 		if (Blocker) Blocker->DestroyComponent();
 	}
-	WaterBlockers.Reset();
+	BlockingTileColliders.Reset();
 	if (ChunkSize <= 0 || CellSize <= 0 || ChunkData.Cells.Num() != ChunkSize * ChunkSize) return;
 
-	// Merge consecutive water cells in each row. Swept pawn movement, including rolls,
-	// hits the shore even when one movement step crosses the entire lake.
+	const auto BlocksPawn = [](const FPSTileCell& Cell)
+	{
+		return Cell.GroundType == EPSTileType::Water || Cell.GroundType == EPSTileType::Stone;
+	};
+	// Merge consecutive blocking cells in each row. Rebuilds split the span immediately
+	// when mining changes a stone cell into dirt.
 	for (int32 Y = 0; Y < ChunkSize; ++Y)
 	{
 		for (int32 X = 0; X < ChunkSize;)
 		{
-			if (ChunkData.Cells[Y * ChunkSize + X].GroundType != EPSTileType::Water) { ++X; continue; }
+			if (!BlocksPawn(ChunkData.Cells[Y * ChunkSize + X])) { ++X; continue; }
 			const int32 StartX = X;
-			while (X < ChunkSize && ChunkData.Cells[Y * ChunkSize + X].GroundType == EPSTileType::Water) ++X;
+			while (X < ChunkSize && BlocksPawn(ChunkData.Cells[Y * ChunkSize + X])) ++X;
 			UBoxComponent* Blocker = NewObject<UBoxComponent>(this, NAME_None, RF_Transient);
 			Blocker->SetupAttachment(SceneRoot);
 			Blocker->SetRelativeLocation(FVector((StartX + (X - StartX) * 0.5f) * CellSize, (Y + 0.5f) * CellSize, 0));
@@ -187,7 +251,7 @@ void APSTileChunkActor::RebuildWaterCollision(const FPSChunkData& ChunkData, con
 			Blocker->SetCanEverAffectNavigation(false);
 			Blocker->SetHiddenInGame(true);
 			Blocker->RegisterComponent();
-			WaterBlockers.Add(Blocker);
+			BlockingTileColliders.Add(Blocker);
 		}
 	}
 }
@@ -224,6 +288,13 @@ void APSTileChunkActor::ApplyMaterials()
 	ApplyMaterial(DirtInstances, TileMesh, DirtMaterial, FLinearColor(0.38f, 0.16f, 0.05f));
 	ApplyMaterial(TilledSoilInstances, TileMesh, DirtMaterial, FLinearColor(0.25f, 0.10f, 0.03f));
 	ApplyMaterial(StoneInstances, TileMesh, StoneMaterial, FLinearColor(0.35f, 0.37f, 0.4f));
+	ApplyMaterial(CopperOreInstances, TileMesh, StoneMaterial, FLinearColor(0.72f, 0.30f, 0.14f));
+	ApplyMaterial(IronOreInstances, TileMesh, StoneMaterial, FLinearColor(0.25f, 0.27f, 0.30f));
+	ApplyMaterial(SilverOreInstances, TileMesh, StoneMaterial, FLinearColor(0.75f, 0.80f, 0.86f));
+	ApplyMaterial(GoldOreInstances, TileMesh, StoneMaterial, FLinearColor(0.95f, 0.62f, 0.08f));
+	ApplyMaterial(TitaniumOreInstances, TileMesh, StoneMaterial, FLinearColor(0.42f, 0.60f, 0.72f));
+	ApplyMaterial(LumistoneOreInstances, TileMesh, StoneMaterial, FLinearColor(0.25f, 0.95f, 0.75f));
+	ApplyMaterial(AsteriumOreInstances, TileMesh, StoneMaterial, FLinearColor(0.70f, 0.45f, 0.95f));
 	ApplyMaterial(WaterInstances, TileMesh, StoneMaterial, FLinearColor(0.02f, 0.3f, 0.9f));
 	ApplyMaterial(SeedInstances, SeedMesh, GrassMaterial, FLinearColor(0.45f, 0.24f, 0.06f));
 }

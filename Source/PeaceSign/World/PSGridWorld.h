@@ -18,7 +18,7 @@ class PEACESIGN_API APSGridWorld : public AActor
 
 public:
 	APSGridWorld();
-	static constexpr int32 DefaultStoneHealth = 3;
+	static constexpr int32 DefaultStoneHealth = 30;
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -33,6 +33,12 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Mining")
 	int32 GetStoneHealth(FIntPoint Cell) const;
+
+	UFUNCTION(BlueprintPure, Category = "Mining")
+	EPSMineralType GetMineralType(FIntPoint Cell) const;
+
+	UFUNCTION(BlueprintPure, Category = "Mining")
+	static int32 GetStoneMaxHealth(EPSMineralType MineralType);
 
 	/** Mine from land up to two cells straight or one cell diagonally. */
 	UFUNCTION(BlueprintPure, Category = "Mining")
@@ -111,6 +117,13 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Save")
 	FString SaveSlotName = TEXT("PeaceSignWorld");
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Mining", meta = (ClampMin = "1"))
+	int32 PlainStoneSpawnWeight = 70;
+
+	/** Data-driven weights; higher tiers become eligible in farther distance bands. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Mining")
+	TArray<FPSMineralSpawnRule> MineralSpawnRules;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Rendering")
 	TSubclassOf<APSTileChunkActor> ChunkActorClass;
 
@@ -135,6 +148,7 @@ private:
 	// Mature crops are omitted. A timestamp bucket shares one growth calculation.
 	TMap<int64, TArray<FIntPoint>> GrowingCrops;
 	EPSTileType GenerateGroundTile(FIntPoint Cell) const;
+	EPSMineralType GenerateMineralType(FIntPoint Cell) const;
 	FPSChunkData GenerateChunk(FIntPoint ChunkCoordinate) const;
 	FPSChunkData& GetOrCreateChunk(FIntPoint ChunkCoordinate);
 	void UpdateActiveChunks(FIntPoint PlayerChunk);

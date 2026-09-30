@@ -405,11 +405,39 @@ EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPo
 	if (!GridWorld) return EPSTileInteractionResult::InvalidCell;
 	if (GridWorld->GetGroundTile(Cell) == EPSTileType::Stone)
 	{
-		const EPSTileInteractionResult Result = GridWorld->MineCell(Cell, 1);
+		const FPSItemStack* EquippedStack = InventoryComponent
+			? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
+		const EPSMineralType MineralType = GridWorld->GetMineralType(Cell);
+		const EPSTileInteractionResult Result = GridWorld->MineCell(Cell, PSItems::GetMiningPower(EquippedStack));
 		if (Result == EPSTileInteractionResult::Mined
 			&& (!InventoryComponent || !InventoryComponent->AddItem(EPSItemType::Stone, 1)))
 		{
 			DropStoneReward(Cell);
+		}
+		if (Result == EPSTileInteractionResult::Mined && MineralType != EPSMineralType::None
+			&& EquippedStack && EquippedStack->ItemType == EPSItemType::Pickaxe)
+		{
+			FName OreItemId = NAME_None;
+			switch (MineralType)
+			{
+			case EPSMineralType::Copper: OreItemId = PSItemIds::CopperOre; break;
+			case EPSMineralType::Iron: OreItemId = PSItemIds::IronOre; break;
+			case EPSMineralType::Silver: OreItemId = PSItemIds::SilverOre; break;
+			case EPSMineralType::Gold: OreItemId = PSItemIds::GoldOre; break;
+			case EPSMineralType::Titanium: OreItemId = PSItemIds::TitaniumOre; break;
+			case EPSMineralType::Lumistone: OreItemId = PSItemIds::LumistoneOre; break;
+			case EPSMineralType::Asterium: OreItemId = PSItemIds::AsteriumOre; break;
+			default: break;
+			}
+			if (!OreItemId.IsNone()
+				&& (!InventoryComponent || !InventoryComponent->AddItemVariant(EPSItemType::Ore, OreItemId, 1)))
+			{
+				FPSItemStack OreStack;
+				OreStack.ItemType = EPSItemType::Ore;
+				OreStack.ItemId = OreItemId;
+				OreStack.Quantity = 1;
+				DropItemReward(Cell, OreStack);
+			}
 		}
 		return Result;
 	}
@@ -1005,14 +1033,19 @@ void APSPlayerController::HandleAdvanceTime()
 
 void APSPlayerController::DropStoneReward(const FIntPoint Cell)
 {
-	if (!GetWorld() || !GridWorld) return;
+	FPSItemStack Stack;
+	Stack.ItemType = EPSItemType::Stone;
+	Stack.Quantity = 1;
+	DropItemReward(Cell, Stack);
+}
+
+void APSPlayerController::DropItemReward(const FIntPoint Cell, const FPSItemStack& Stack)
+{
+	if (!GetWorld() || !GridWorld || Stack.IsEmpty()) return;
 	const FTransform SpawnTransform(FRotator::ZeroRotator, GridWorld->CellToWorldCenter(Cell) + FVector(0, 0, 20));
 	APSWorldItemActor* Drop = GetWorld()->SpawnActorDeferred<APSWorldItemActor>(
 		APSWorldItemActor::StaticClass(), SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Drop) return;
-	FPSItemStack Stack;
-	Stack.ItemType = EPSItemType::Stone;
-	Stack.Quantity = 1;
 	Drop->InitializeItem(Stack);
 	Drop->FinishSpawning(SpawnTransform);
 }
