@@ -12,6 +12,9 @@
 
 namespace
 {
+	constexpr int32 CurrentWorldSaveVersion = 2;
+	constexpr int32 LegacyStoneHealthScale = 10;
+
 	uint32 HashCell(const FIntPoint Cell, const int32 Seed)
 	{
 		uint32 Hash = static_cast<uint32>(Cell.X) * 0x8da6b343u;
@@ -32,6 +35,21 @@ APSGridWorld::APSGridWorld()
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+
+	const auto AddMineralRule = [this](const EPSMineralType MineralType, const int32 MinimumBand, const int32 Weight)
+	{
+		FPSMineralSpawnRule& Rule = MineralSpawnRules.AddDefaulted_GetRef();
+		Rule.MineralType = MineralType;
+		Rule.MinimumDistanceBand = MinimumBand;
+		Rule.Weight = Weight;
+	};
+	AddMineralRule(EPSMineralType::Copper, 0, 30);
+	AddMineralRule(EPSMineralType::Iron, 1, 20);
+	AddMineralRule(EPSMineralType::Silver, 2, 14);
+	AddMineralRule(EPSMineralType::Gold, 3, 10);
+	AddMineralRule(EPSMineralType::Titanium, 4, 7);
+	AddMineralRule(EPSMineralType::Lumistone, 5, 4);
+	AddMineralRule(EPSMineralType::Asterium, 7, 2);
 
 	ChunkActorClass = APSTileChunkActor::StaticClass();
 }
@@ -185,7 +203,35 @@ int32 APSGridWorld::GetStoneHealth(const FIntPoint Cell) const
 		if (Chunk->Cells.IsValidIndex(CellIndex))
 			return FMath::Max(1, Chunk->Cells[CellIndex].StoneHealth);
 	}
-	return DefaultStoneHealth;
+	return GetStoneMaxHealth(GenerateMineralType(Cell));
+}
+
+EPSMineralType APSGridWorld::GetMineralType(const FIntPoint Cell) const
+{
+	if (GetGroundTile(Cell) != EPSTileType::Stone) return EPSMineralType::None;
+	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].MineralType : EPSMineralType::None;
+	if (const FPSChunkSaveData* Chunk = ModifiedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].MineralType : EPSMineralType::None;
+	return GenerateMineralType(Cell);
+}
+
+int32 APSGridWorld::GetStoneMaxHealth(const EPSMineralType MineralType)
+{
+	switch (MineralType)
+	{
+	case EPSMineralType::Copper: return DefaultStoneHealth + 15;
+	case EPSMineralType::Iron: return DefaultStoneHealth + 45;
+	case EPSMineralType::Silver: return DefaultStoneHealth + 90;
+	case EPSMineralType::Gold: return DefaultStoneHealth + 165;
+	case EPSMineralType::Titanium: return DefaultStoneHealth + 285;
+	case EPSMineralType::Lumistone: return DefaultStoneHealth + 480;
+	case EPSMineralType::Asterium: return DefaultStoneHealth + 795;
+	case EPSMineralType::None:
+	default: return DefaultStoneHealth;
+	}
 }
 
 bool APSGridWorld::CanMineFrom(const FIntPoint PlayerCell, const FIntPoint StoneCell) const
@@ -209,7 +255,7 @@ EPSTileInteractionResult APSGridWorld::MineCell(const FIntPoint Cell, const int3
 	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[CellIndex];
-	if (Tile.StoneHealth <= 0) Tile.StoneHealth = DefaultStoneHealth;
+	if (Tile.StoneHealth <= 0) Tile.StoneHealth = GetStoneMaxHealth(Tile.MineralType);
 	Tile.StoneHealth = FMath::Max(0, Tile.StoneHealth - Damage);
 	const bool bDestroyed = Tile.StoneHealth == 0;
 	if (bDestroyed) Tile.GroundType = EPSTileType::Dirt;
@@ -488,6 +534,31 @@ EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 	return Roll < 5 ? EPSTileType::Stone : Roll < 15 ? EPSTileType::Dirt : EPSTileType::Grass;
 }
 
+EPSMineralType APSGridWorld::GenerateMineralType(const FIntPoint Cell) const
+{
+	if (GenerateGroundTile(Cell) != EPSTileType::Stone) return EPSMineralType::None;
+	const int32 Distance = FMath::Max(FMath::Abs(Cell.X), FMath::Abs(Cell.Y));
+	const int32 DistanceBand = FMath::Clamp(
+		Distance * 8 / FMath::Max(1, WorldHalfExtentInCells), 0, 7);
+	const int32 PlainWeight = FMath::Max(1, PlainStoneSpawnWeight);
+	int32 TotalWeight = PlainWeight;
+	for (const FPSMineralSpawnRule& Rule : MineralSpawnRules)
+		if (Rule.MineralType != EPSMineralType::None && DistanceBand >= Rule.MinimumDistanceBand)
+			TotalWeight += FMath::Max(0, Rule.Weight);
+
+	int32 Roll = static_cast<int32>(HashCell(Cell, WorldSeed + 7919) % static_cast<uint32>(TotalWeight));
+	if (Roll < PlainWeight) return EPSMineralType::None;
+	Roll -= PlainWeight;
+	for (const FPSMineralSpawnRule& Rule : MineralSpawnRules)
+	{
+		if (Rule.MineralType == EPSMineralType::None || DistanceBand < Rule.MinimumDistanceBand) continue;
+		const int32 Weight = FMath::Max(0, Rule.Weight);
+		if (Roll < Weight) return Rule.MineralType;
+		Roll -= Weight;
+	}
+	return EPSMineralType::None;
+}
+
 FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 {
 	FPSChunkData Chunk;
@@ -503,7 +574,10 @@ FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 				ChunkCoordinate.Y * ChunkSize + LocalY);
 			FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
 			Tile.GroundType = GenerateGroundTile(Cell);
-			Tile.StoneHealth = Tile.GroundType == EPSTileType::Stone ? DefaultStoneHealth : 0;
+			Tile.MineralType = Tile.GroundType == EPSTileType::Stone
+				? GenerateMineralType(Cell) : EPSMineralType::None;
+			Tile.StoneHealth = Tile.GroundType == EPSTileType::Stone
+				? GetStoneMaxHealth(Tile.MineralType) : 0;
 		}
 	}
 
@@ -608,9 +682,10 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
-	Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)].GroundType = GroundType;
-	Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)].StoneHealth =
-		GroundType == EPSTileType::Stone ? DefaultStoneHealth : 0;
+	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
+	Tile.GroundType = GroundType;
+	Tile.MineralType = EPSMineralType::None;
+	Tile.StoneHealth = GroundType == EPSTileType::Stone ? DefaultStoneHealth : 0;
 
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
@@ -687,8 +762,24 @@ void APSGridWorld::LoadWorld()
 		for (int32 Index = 0; Index < Restored.Cells.Num(); ++Index)
 		{
 			FPSTileCell& Tile = Restored.Cells[Index];
+			if (Tile.GroundType == EPSTileType::Stone && SaveGame->DataVersion < 1)
+			{
+				Tile.StoneHealth = Tile.StoneHealth > 0
+					? FMath::Clamp(Tile.StoneHealth * LegacyStoneHealthScale, LegacyStoneHealthScale, DefaultStoneHealth)
+					: DefaultStoneHealth;
+			}
+			if (Tile.GroundType == EPSTileType::Stone && SaveGame->DataVersion < 2)
+			{
+				const int32 PreviousDamage = FMath::Max(0, DefaultStoneHealth - Tile.StoneHealth);
+				const FIntPoint Cell(Chunk.Coordinate.X * ChunkSize + Index % ChunkSize,
+					Chunk.Coordinate.Y * ChunkSize + Index / ChunkSize);
+				Tile.MineralType = GenerateMineralType(Cell);
+				Tile.StoneHealth = FMath::Max(1, GetStoneMaxHealth(Tile.MineralType) - PreviousDamage);
+			}
+			else if (Tile.GroundType != EPSTileType::Stone)
+				Tile.MineralType = EPSMineralType::None;
 			if (Tile.GroundType == EPSTileType::Stone && Tile.StoneHealth <= 0)
-				Tile.StoneHealth = DefaultStoneHealth;
+				Tile.StoneHealth = GetStoneMaxHealth(Tile.MineralType);
 			else if (Tile.GroundType != EPSTileType::Stone)
 				Tile.StoneHealth = 0;
 			if (Tile.CropType == EPSCropType::None) continue;
@@ -723,6 +814,7 @@ void APSGridWorld::SaveWorld() const
 	}
 
 	SaveGame->WorldSeed = WorldSeed;
+	SaveGame->DataVersion = CurrentWorldSaveVersion;
 	SaveGame->GrowthClockHalfHour = GetGrowthHalfHour();
 	if (const UPSGameTimeSubsystem* Clock = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr)
 	{

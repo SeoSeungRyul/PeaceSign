@@ -37,6 +37,21 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> StoneInstances;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> CopperOreInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> IronOreInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> SilverOreInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> GoldOreInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> TitaniumOreInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> LumistoneOreInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Mining")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> AsteriumOreInstances;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> WaterInstances;
 
@@ -65,10 +80,10 @@ protected:
 	float RenderZOffset = 1.0f;
 
 private:
-	// Separate collision volumes keep the flat water surface unchanged.
+	// Separate collision volumes keep flat water and mineable tile visuals unchanged.
 	UPROPERTY(Transient)
-	TArray<TObjectPtr<UBoxComponent>> WaterBlockers;
-	void RebuildWaterCollision(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize);
+	TArray<TObjectPtr<UBoxComponent>> BlockingTileColliders;
+	void RebuildBlockingCollision(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize);
 	void ConfigureInstances(UHierarchicalInstancedStaticMeshComponent* Instances) const;
 	void ApplyMaterials();
 };

@@ -48,6 +48,12 @@ bool FPSWaterCollisionTest::RunTest(const FString& Parameters)
 	for (FPSTileCell& Cell : Data.Cells) Cell.GroundType = EPSTileType::Grass;
 	Chunk->Rebuild(Data, 4, 100);
 	TestFalse(TEXT("Removing water removes old collision"), Sweep(FVector(-100, 200, 50), FVector(600, 0, 0)));
+	Data.Cells[5].GroundType = EPSTileType::Stone;
+	Chunk->Rebuild(Data, 4, 100);
+	TestTrue(TEXT("Mineable stone blocks character movement"), Sweep(FVector(-100, 150, 50), FVector(600, 0, 0)));
+	Data.Cells[5].GroundType = EPSTileType::Dirt;
+	Chunk->Rebuild(Data, 4, 100);
+	TestFalse(TEXT("Mined stone collision is removed"), Sweep(FVector(-100, 150, 50), FVector(600, 0, 0)));
 	Data.Cells[5].GroundType = EPSTileType::Water;
 	Chunk->Rebuild(Data, 4, 100);
 	TestTrue(TEXT("Regenerated water blocks again"), Sweep(FVector(-100, 150, 50), FVector(600, 0, 0)));

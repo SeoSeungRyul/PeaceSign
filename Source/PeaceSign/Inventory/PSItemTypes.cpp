@@ -5,7 +5,7 @@ namespace
 	FPSItemDefinition MakeDefinition(const TCHAR* Name, const TCHAR* Description, const int32 MaxStack,
 		const TCHAR* Color, const int32 PlaceholderIcon, const int32 MaxDurability = 0,
 		const float FishingTimeBonus = 0.0f, const float ExtraFishChance = 0.0f,
-		const bool bInfiniteDurability = false)
+		const bool bInfiniteDurability = false, const int32 MiningPower = 0)
 	{
 		FPSItemDefinition Result;
 		Result.Name = FText::FromString(Name);
@@ -17,7 +17,19 @@ namespace
 		Result.FishingTimeBonus = FishingTimeBonus;
 		Result.ExtraFishChance = ExtraFishChance;
 		Result.bInfiniteDurability = bInfiniteDurability;
+		Result.MiningPower = MiningPower;
 		return Result;
+	}
+
+	FPSItemDefinition MakePickaxeDefinition(const TCHAR* Name, const TCHAR* Color, const int32 MiningPower)
+	{
+		return MakeDefinition(Name, TEXT("도구\n돌 블록과 광물을 채굴하는 곡괭이입니다."),
+			1, Color, 6, 100, 0.0f, 0.0f, false, MiningPower);
+	}
+
+	FPSItemDefinition MakeOreDefinition(const TCHAR* Name, const TCHAR* Color)
+	{
+		return MakeDefinition(Name, TEXT("제작 재료\n제련하여 주괴로 만드는 광석입니다."), 999, Color, 4);
 	}
 }
 
@@ -30,8 +42,21 @@ const FPSItemDefinition& PSItems::GetDefinition(const EPSItemType ItemType, cons
 	static const FPSItemDefinition Wood = MakeDefinition(TEXT("목재"), TEXT("제작 재료\n건축과 제작에 사용하는 나무입니다."), 999, TEXT("C58A58"), 3);
 	static const FPSItemDefinition Stone = MakeDefinition(TEXT("돌"), TEXT("제작과 건축에 사용하는 돌입니다."), 999, TEXT("B4B9BF"), 4);
 	static const FPSItemDefinition Fish = MakeDefinition(TEXT("물고기"), TEXT("식량\n물에서 낚아 올린 작은 물고기입니다."), 999, TEXT("7CC5CF"), 5);
-	static const FPSItemDefinition StonePickaxe = MakeDefinition(
-		TEXT("돌 곡괭이"), TEXT("도구\n돌 블록을 채굴하는 임시 곡괭이입니다."), 1, TEXT("AAB0B7"), 6, 100);
+	static const FPSItemDefinition StonePickaxe = MakePickaxeDefinition(TEXT("돌 곡괭이"), TEXT("AAB0B7"), 10);
+	static const FPSItemDefinition CopperPickaxe = MakePickaxeDefinition(TEXT("구리 곡괭이"), TEXT("B87333"), 15);
+	static const FPSItemDefinition IronPickaxe = MakePickaxeDefinition(TEXT("철 곡괭이"), TEXT("666C73"), 25);
+	static const FPSItemDefinition SilverPickaxe = MakePickaxeDefinition(TEXT("은 곡괭이"), TEXT("D9DEE5"), 40);
+	static const FPSItemDefinition GoldPickaxe = MakePickaxeDefinition(TEXT("금 곡괭이"), TEXT("E3B341"), 65);
+	static const FPSItemDefinition TitaniumPickaxe = MakePickaxeDefinition(TEXT("티타늄 곡괭이"), TEXT("9EB5C5"), 105);
+	static const FPSItemDefinition LumistonePickaxe = MakePickaxeDefinition(TEXT("루미석 곡괭이"), TEXT("73E4CC"), 170);
+	static const FPSItemDefinition AsteriumPickaxe = MakePickaxeDefinition(TEXT("아스테륨 곡괭이"), TEXT("C6A7FF"), 275);
+	static const FPSItemDefinition CopperOre = MakeOreDefinition(TEXT("구리 광석"), TEXT("B87333"));
+	static const FPSItemDefinition IronOre = MakeOreDefinition(TEXT("철 광석"), TEXT("666C73"));
+	static const FPSItemDefinition SilverOre = MakeOreDefinition(TEXT("은 광석"), TEXT("D9DEE5"));
+	static const FPSItemDefinition GoldOre = MakeOreDefinition(TEXT("금 광석"), TEXT("E3B341"));
+	static const FPSItemDefinition TitaniumOre = MakeOreDefinition(TEXT("티타늄 광석"), TEXT("9EB5C5"));
+	static const FPSItemDefinition LumistoneOre = MakeOreDefinition(TEXT("루미석 광석"), TEXT("73E4CC"));
+	static const FPSItemDefinition AsteriumOre = MakeOreDefinition(TEXT("아스테륨 광석"), TEXT("C6A7FF"));
 	// Durability values are tuning defaults until the item data sheet supplies final values.
 	static const FPSItemDefinition WoodenRod = MakeDefinition(TEXT("나무 낚싯대"), TEXT("도구\n낚시가 가능한 기본 낚싯대입니다."), 1, TEXT("B88951"), 5, 100);
 	static const FPSItemDefinition PlasticRod = MakeDefinition(TEXT("플라스틱 낚싯대"), TEXT("도구\n미니게임 제한시간이 2초 증가합니다."), 1, TEXT("E8D8B5"), 5, 100, 2.0f);
@@ -58,7 +83,23 @@ const FPSItemDefinition& PSItems::GetDefinition(const EPSItemType ItemType, cons
 		return WoodenRod;
 	case EPSItemType::FishingBait: return Bait;
 	case EPSItemType::FishingBobber: return Bobber;
-	case EPSItemType::Pickaxe: return StonePickaxe;
+	case EPSItemType::Pickaxe:
+		if (ItemId == PSItemIds::CopperPickaxe) return CopperPickaxe;
+		if (ItemId == PSItemIds::IronPickaxe) return IronPickaxe;
+		if (ItemId == PSItemIds::SilverPickaxe) return SilverPickaxe;
+		if (ItemId == PSItemIds::GoldPickaxe) return GoldPickaxe;
+		if (ItemId == PSItemIds::TitaniumPickaxe) return TitaniumPickaxe;
+		if (ItemId == PSItemIds::LumistonePickaxe) return LumistonePickaxe;
+		if (ItemId == PSItemIds::AsteriumPickaxe) return AsteriumPickaxe;
+		return StonePickaxe;
+	case EPSItemType::Ore:
+		if (ItemId == PSItemIds::IronOre) return IronOre;
+		if (ItemId == PSItemIds::SilverOre) return SilverOre;
+		if (ItemId == PSItemIds::GoldOre) return GoldOre;
+		if (ItemId == PSItemIds::TitaniumOre) return TitaniumOre;
+		if (ItemId == PSItemIds::LumistoneOre) return LumistoneOre;
+		if (ItemId == PSItemIds::AsteriumOre) return AsteriumOre;
+		return CopperOre;
 	case EPSItemType::None:
 	default: return Empty;
 	}
@@ -78,7 +119,15 @@ FName PSItems::GetDefaultItemId(const EPSItemType ItemType)
 {
 	if (ItemType == EPSItemType::FishingRod) return PSItemIds::WoodenFishingRod;
 	if (ItemType == EPSItemType::Pickaxe) return PSItemIds::StonePickaxe;
+	if (ItemType == EPSItemType::Ore) return PSItemIds::CopperOre;
 	return NAME_None;
+}
+
+int32 PSItems::GetMiningPower(const FPSItemStack* EquippedStack)
+{
+	if (!EquippedStack || EquippedStack->IsEmpty() || EquippedStack->ItemType != EPSItemType::Pickaxe)
+		return DefaultMiningPower;
+	return FMath::Max(0, GetDefinition(*EquippedStack).MiningPower);
 }
 
 bool PSItems::UsesDurability(const FPSItemStack& Stack)
@@ -89,5 +138,5 @@ bool PSItems::UsesDurability(const FPSItemStack& Stack)
 
 bool PSItems::IsValid(const EPSItemType ItemType)
 {
-	return ItemType > EPSItemType::None && ItemType <= EPSItemType::Pickaxe;
+	return ItemType > EPSItemType::None && ItemType <= EPSItemType::Ore;
 }

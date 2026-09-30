@@ -167,6 +167,7 @@ private:
 	UTexture2D* ResolveFishIcon(FName IconID) const;
 	void DropFishingReward(int32 Quantity = 1);
 	void DropStoneReward(FIntPoint Cell);
+	void DropItemReward(FIntPoint Cell, const FPSItemStack& Stack);
 	void HandleFishingUp();
 	void HandleFishingLeft();
 	void HandleFishingDown();
