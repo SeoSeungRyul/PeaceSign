@@ -6,6 +6,7 @@
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
 #include "PSTileChunkActor.h"
+#include "PSDirtAutoTileSet.h"
 #include "PSWorldSaveGame.h"
 #include "PSCropGrowth.h"
 #include "../Time/PSGameTimeSubsystem.h"
@@ -263,7 +264,8 @@ EPSTileInteractionResult APSGridWorld::MineCell(const FIntPoint Cell, const int3
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
-	RebuildChunk(ChunkCoordinate);
+	if (bDestroyed) RebuildChunksAroundCell(Cell);
+	else RebuildChunk(ChunkCoordinate);
 	SaveWorld();
 	return bDestroyed ? EPSTileInteractionResult::Mined : EPSTileInteractionResult::StoneDamaged;
 }
@@ -395,7 +397,8 @@ bool APSGridWorld::ResetWorld()
 			ActiveChunkActors.Remove(ChunkCoordinate);
 			continue;
 		}
-		ChunkActor->Rebuild(GetOrCreateChunk(ChunkCoordinate), ChunkSize, CellSize);
+		const FPSChunkData RenderData = BuildRenderChunkData(ChunkCoordinate, GetOrCreateChunk(ChunkCoordinate));
+		ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet);
 	}
 
 	if (const APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
@@ -437,6 +440,20 @@ void APSGridWorld::GenerateEditorPreview()
 				GenerateGroundTile(Cell);
 		}
 	}
+	for (int32 LocalY = 0; LocalY < PreviewSize; ++LocalY)
+	{
+		for (int32 LocalX = 0; LocalX < PreviewSize; ++LocalX)
+		{
+			const FIntPoint Cell(LocalX - PreviewHalfExtent, LocalY - PreviewHalfExtent);
+			FPSTileCell& Tile = PreviewData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), PreviewSize)];
+			if (Tile.GroundType != EPSTileType::Grass && Tile.GroundType != EPSTileType::Dirt) continue;
+			const uint16 Mask = BuildDirtNeighborMask(Cell);
+			const uint32 VisualSeed = HashCell(Cell, WorldSeed + 104729);
+			Tile.Variant = DirtAutoTileSet
+				? DirtAutoTileSet->SelectVariant(Mask, VisualSeed)
+				: PSDirtAutoTile::SelectDefaultVariant(Mask, VisualSeed);
+		}
+	}
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;
@@ -462,7 +479,7 @@ void APSGridWorld::GenerateEditorPreview()
 	PreviewActor->bIsEditorOnlyActor = true;
 	PreviewActor->Tags.AddUnique(TEXT("PSGridEditorPreview"));
 	PreviewActor->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
-	PreviewActor->Rebuild(PreviewData, PreviewSize, CellSize);
+	PreviewActor->Rebuild(PreviewData, PreviewSize, CellSize, DirtAutoTileSet);
 	EditorPreviewActor = PreviewActor;
 	GetLevel()->MarkPackageDirty();
 #endif
@@ -531,7 +548,7 @@ EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 
 	if (IsLakeCell(Cell)) return EPSTileType::Water;
 	const uint32 Roll = HashCell(Cell, WorldSeed) % 100;
-	return Roll < 5 ? EPSTileType::Stone : Roll < 15 ? EPSTileType::Dirt : EPSTileType::Grass;
+	return Roll < 5 ? EPSTileType::Stone : Roll < 90 ? EPSTileType::Dirt : EPSTileType::Grass;
 }
 
 EPSMineralType APSGridWorld::GenerateMineralType(const FIntPoint Cell) const
@@ -582,6 +599,50 @@ FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 	}
 
 	return Chunk;
+}
+
+uint16 APSGridWorld::BuildDirtNeighborMask(const FIntPoint Cell) const
+{
+	const auto IsDirt = [this](const FIntPoint Candidate)
+	{
+		return GetGroundTile(Candidate) == EPSTileType::Dirt;
+	};
+
+	uint16 Mask = IsDirt(Cell) ? PSDirtAutoTile::Center : 0;
+	if (IsDirt(Cell + FIntPoint(0, 1))) Mask |= PSDirtAutoTile::North;
+	if (IsDirt(Cell + FIntPoint(1, 0))) Mask |= PSDirtAutoTile::East;
+	if (IsDirt(Cell + FIntPoint(0, -1))) Mask |= PSDirtAutoTile::South;
+	if (IsDirt(Cell + FIntPoint(-1, 0))) Mask |= PSDirtAutoTile::West;
+	if (IsDirt(Cell + FIntPoint(-1, 1))) Mask |= PSDirtAutoTile::NorthWest;
+	if (IsDirt(Cell + FIntPoint(1, 1))) Mask |= PSDirtAutoTile::NorthEast;
+	if (IsDirt(Cell + FIntPoint(1, -1))) Mask |= PSDirtAutoTile::SouthEast;
+	if (IsDirt(Cell + FIntPoint(-1, -1))) Mask |= PSDirtAutoTile::SouthWest;
+	return Mask;
+}
+
+FPSChunkData APSGridWorld::BuildRenderChunkData(
+	const FIntPoint ChunkCoordinate,
+	const FPSChunkData& Source) const
+{
+	FPSChunkData Result = Source;
+	for (int32 LocalY = 0; LocalY < ChunkSize; ++LocalY)
+	{
+		for (int32 LocalX = 0; LocalX < ChunkSize; ++LocalX)
+		{
+			FPSTileCell& Tile = Result.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
+			Tile.Variant = PSDirtAutoTile::NoVariant;
+			if (Tile.GroundType != EPSTileType::Grass && Tile.GroundType != EPSTileType::Dirt) continue;
+			const FIntPoint Cell(
+				ChunkCoordinate.X * ChunkSize + LocalX,
+				ChunkCoordinate.Y * ChunkSize + LocalY);
+			const uint16 Mask = BuildDirtNeighborMask(Cell);
+			const uint32 VisualSeed = HashCell(Cell, WorldSeed + 104729);
+			Tile.Variant = DirtAutoTileSet
+				? DirtAutoTileSet->SelectVariant(Mask, VisualSeed)
+				: PSDirtAutoTile::SelectDefaultVariant(Mask, VisualSeed);
+		}
+	}
+	return Result;
 }
 
 FPSChunkData& APSGridWorld::GetOrCreateChunk(const FIntPoint ChunkCoordinate)
@@ -661,15 +722,26 @@ void APSGridWorld::SpawnChunkRenderer(const FIntPoint ChunkCoordinate)
 	}
 
 	ActiveChunkActors.Add(ChunkCoordinate, ChunkActor);
-	ChunkActor->Rebuild(GetOrCreateChunk(ChunkCoordinate), ChunkSize, CellSize);
+	const FPSChunkData RenderData = BuildRenderChunkData(ChunkCoordinate, GetOrCreateChunk(ChunkCoordinate));
+	ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet);
 }
 
 void APSGridWorld::RebuildChunk(const FIntPoint ChunkCoordinate)
 {
 	if (APSTileChunkActor* ChunkActor = ActiveChunkActors.FindRef(ChunkCoordinate))
 	{
-		ChunkActor->Rebuild(GetOrCreateChunk(ChunkCoordinate), ChunkSize, CellSize);
+		const FPSChunkData RenderData = BuildRenderChunkData(ChunkCoordinate, GetOrCreateChunk(ChunkCoordinate));
+		ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet);
 	}
+}
+
+void APSGridWorld::RebuildChunksAroundCell(const FIntPoint Cell)
+{
+	TSet<FIntPoint> Chunks;
+	for (int32 Y = -1; Y <= 1; ++Y)
+		for (int32 X = -1; X <= 1; ++X)
+			Chunks.Add(PSGrid::CellToChunk(Cell + FIntPoint(X, Y), ChunkSize));
+	for (const FIntPoint Chunk : Chunks) RebuildChunk(Chunk);
 }
 
 bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundType)
@@ -691,7 +763,7 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
 
-	RebuildChunk(ChunkCoordinate);
+	RebuildChunksAroundCell(Cell);
 	SaveWorld();
 	return true;
 }
