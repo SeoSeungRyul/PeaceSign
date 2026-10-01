@@ -943,6 +943,7 @@ void APSPlayerController::HandleInventory()
 		if (InventoryWidget) InventoryWidget->SetInventoryComponent(InventoryComponent);
 	}
 	if (!InventoryWidget) return;
+	if (HotbarWidget) InventoryWidget->AttachHotbar(HotbarWidget);
 	InventoryWidget->AddToPlayerScreen(100);
 	bInventoryOpen = true;
 	// Temporary single-player menu policy; never unpause a pause owned by another system.
@@ -960,7 +961,9 @@ void APSPlayerController::CloseInventory()
 {
 	if (!bInventoryOpen) return;
 	UWidgetBlueprintLibrary::CancelDragDrop();
+	if (InventoryWidget) InventoryWidget->DetachHotbar();
 	if (InventoryWidget) InventoryWidget->RemoveFromParent();
+	if (HotbarWidget && !HotbarWidget->IsInViewport()) HotbarWidget->AddToViewport(300);
 	bInventoryOpen = false;
 	if (bInventoryOwnsPause) SetPause(false);
 	bInventoryOwnsPause = false;

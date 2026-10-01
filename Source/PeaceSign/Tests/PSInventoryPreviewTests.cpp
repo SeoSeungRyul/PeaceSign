@@ -7,6 +7,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
+#include "Components/SizeBox.h"
 #include "Engine/World.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Kismet/GameplayStatics.h"
@@ -40,6 +41,12 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("Always-visible hotbar creates"), Hotbar)) { World->DestroyWorld(false); return false; }
 	if (!Hotbar->WidgetTree->RootWidget) Hotbar->NativeOnInitialized();
 	Hotbar->SetInventoryComponent(Inventory);
+	Widget->AttachHotbar(Hotbar);
+	TestTrue(TEXT("Inventory hosts the existing hotbar while open"), Widget->IsHotbarAttached());
+	TestTrue(TEXT("Hosted hotbar is parented inside the inventory"), Hotbar->GetParent() == Widget->HotbarHost.Get());
+	TestEqual(TEXT("Detaching returns the same hotbar instance"), Widget->DetachHotbar(), Hotbar);
+	TestFalse(TEXT("Inventory releases the hotbar when closed"), Widget->IsHotbarAttached());
+	Widget->AttachHotbar(Hotbar);
 	TestNotNull(TEXT("Hotbar builds its visual tree"), Hotbar->WidgetTree->RootWidget.Get());
 	UCanvasPanel* HotbarCanvas = Cast<UCanvasPanel>(Hotbar->WidgetTree->RootWidget);
 	TestNotNull(TEXT("Hotbar uses a full-screen positioning canvas"), HotbarCanvas);

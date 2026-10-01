@@ -4,10 +4,12 @@
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/BoxComponent.h"
+#include "Engine/Texture2D.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 #include "PSTileTypes.h"
+#include "PSDirtAutoTileSet.h"
 #include "PSCropGrowth.h"
 
 APSTileChunkActor::APSTileChunkActor()
@@ -67,6 +69,20 @@ APSTileChunkActor::APSTileChunkActor()
 		StoneMaterial = DefaultTileMaterial.Object;
 	}
 
+	static ConstructorHelpers::FObjectFinder<UTexture2D> DefaultDirtTexture(
+		TEXT("/Game/Art/Tiles/Dirt/Set3/5_Dirt_Set3_MM.5_Dirt_Set3_MM"));
+	if (DefaultDirtTexture.Succeeded())
+	{
+		DirtTexture = DefaultDirtTexture.Object;
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> DefaultDirtTextureMaterial(
+		TEXT("/Paper2D/OpaqueUnlitSpriteMaterial.OpaqueUnlitSpriteMaterial"));
+	if (DefaultDirtTextureMaterial.Succeeded())
+	{
+		DirtTextureMaterial = DefaultDirtTextureMaterial.Object;
+	}
+
 	ConfigureInstances(GrassInstances);
 	ConfigureInstances(DirtInstances);
 	ConfigureInstances(StoneInstances);
@@ -89,7 +105,11 @@ void APSTileChunkActor::OnConstruction(const FTransform& Transform)
 	ApplyMaterials();
 }
 
-void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
+void APSTileChunkActor::Rebuild(
+	const FPSChunkData& ChunkData,
+	const int32 ChunkSize,
+	const float CellSize,
+	const UPSDirtAutoTileSet* DirtTileSet)
 {
 	RebuildBlockingCollision(ChunkData, ChunkSize, CellSize);
 	GrassInstances->ClearInstances();
@@ -105,6 +125,8 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	WaterInstances->ClearInstances();
 	TilledSoilInstances->ClearInstances();
 	SeedInstances->ClearInstances();
+	for (const TPair<uint8, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Pair : DirtVariantInstances)
+		if (Pair.Value) Pair.Value->ClearInstances();
 
 	if (!TileMesh || ChunkData.Cells.Num() != ChunkSize * ChunkSize)
 	{
@@ -125,6 +147,7 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	TArray<FTransform> WaterTransforms;
 	TArray<FTransform> TilledSoilTransforms;
 	TArray<FTransform> SeedTransforms;
+	TMap<uint8, TArray<FTransform>> DirtVariantTransforms;
 	GrassTransforms.Reserve(ChunkData.Cells.Num());
 	DirtTransforms.Reserve(ChunkData.Cells.Num());
 	StoneTransforms.Reserve(ChunkData.Cells.Num());
@@ -144,13 +167,15 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 		{
 			const FPSTileCell& Cell = ChunkData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
 			TArray<FTransform>* TargetTransforms = nullptr;
+			const bool bUsesDirtVariant = Cell.Variant != PSDirtAutoTile::NoVariant
+				&& (Cell.GroundType == EPSTileType::Grass || Cell.GroundType == EPSTileType::Dirt);
 			switch (Cell.GroundType)
 			{
 			case EPSTileType::Grass:
-				TargetTransforms = &GrassTransforms;
+				if (!bUsesDirtVariant) TargetTransforms = &GrassTransforms;
 				break;
 			case EPSTileType::Dirt:
-				TargetTransforms = &DirtTransforms;
+				if (!bUsesDirtVariant) TargetTransforms = &DirtTransforms;
 				break;
 			case EPSTileType::TilledSoil:
 				TargetTransforms = &TilledSoilTransforms;
@@ -176,13 +201,18 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 				break;
 			}
 
-			if (TargetTransforms)
+			const FVector GroundLocation(
+				(static_cast<float>(LocalX) + 0.5f) * CellSize,
+				(static_cast<float>(LocalY) + 0.5f) * CellSize,
+				RenderZOffset);
+			if (bUsesDirtVariant)
 			{
-				const FVector Location(
-					(static_cast<float>(LocalX) + 0.5f) * CellSize,
-					(static_cast<float>(LocalY) + 0.5f) * CellSize,
-					RenderZOffset);
-				TargetTransforms->Emplace(FRotator::ZeroRotator, Location, FVector(TileScale));
+				DirtVariantTransforms.FindOrAdd(Cell.Variant).Emplace(
+					FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
+			}
+			else if (TargetTransforms)
+			{
+				TargetTransforms->Emplace(FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
 			}
 			if (Cell.CropType != EPSCropType::None)
 			{
@@ -215,6 +245,56 @@ void APSTileChunkActor::Rebuild(const FPSChunkData& ChunkData, const int32 Chunk
 	WaterInstances->AddInstances(WaterTransforms, false, false, false);
 	TilledSoilInstances->AddInstances(TilledSoilTransforms, false, false, false);
 	SeedInstances->AddInstances(SeedTransforms, false, false, false);
+	for (const TPair<uint8, TArray<FTransform>>& Pair : DirtVariantTransforms)
+	{
+		UHierarchicalInstancedStaticMeshComponent* Instances = GetOrCreateDirtVariantComponent(Pair.Key);
+		ApplyDirtVariantMaterial(Pair.Key, DirtTileSet);
+		if (Instances) Instances->AddInstances(Pair.Value, false, false, false);
+	}
+}
+
+UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateDirtVariantComponent(const uint8 Variant)
+{
+	if (UHierarchicalInstancedStaticMeshComponent* Existing = DirtVariantInstances.FindRef(Variant))
+		return Existing;
+	if (Variant == PSDirtAutoTile::NoVariant) return nullptr;
+
+	const FName ComponentName(*FString::Printf(TEXT("DirtVariant_%u"), Variant));
+	UHierarchicalInstancedStaticMeshComponent* Instances =
+		NewObject<UHierarchicalInstancedStaticMeshComponent>(this, ComponentName, RF_Transient);
+	Instances->SetupAttachment(SceneRoot);
+	ConfigureInstances(Instances);
+	Instances->RegisterComponent();
+	DirtVariantInstances.Add(Variant, Instances);
+	return Instances;
+}
+
+void APSTileChunkActor::ApplyDirtVariantMaterial(
+	const uint8 Variant,
+	const UPSDirtAutoTileSet* DirtTileSet)
+{
+	UHierarchicalInstancedStaticMeshComponent* Instances = DirtVariantInstances.FindRef(Variant);
+	if (!Instances) return;
+
+	UTexture2D* Texture = DirtTileSet ? DirtTileSet->GetVariantTexture(Variant) : nullptr;
+	if (!Texture && (!DirtTileSet || DirtTileSet->Rules.IsEmpty()))
+	{
+		if (const TCHAR* TexturePath = PSDirtAutoTile::GetDefaultVariantTexturePath(Variant))
+			Texture = LoadObject<UTexture2D>(nullptr, TexturePath);
+	}
+	if (!Texture) Texture = DirtTexture;
+
+	UMaterialInstanceDynamic* DynamicMaterial = DirtVariantMaterials.FindRef(Variant);
+	if (!DynamicMaterial)
+	{
+		UMaterialInterface* Parent = DirtTextureMaterial ? DirtTextureMaterial : DirtMaterial;
+		if (!Parent) return;
+		DynamicMaterial = UMaterialInstanceDynamic::Create(Parent, this);
+		DirtVariantMaterials.Add(Variant, DynamicMaterial);
+		Instances->SetMaterial(0, DynamicMaterial);
+	}
+	DynamicMaterial->SetVectorParameterValue(TEXT("Color"), FLinearColor::White);
+	if (Texture) DynamicMaterial->SetTextureParameterValue(TEXT("SpriteTexture"), Texture);
 }
 
 void APSTileChunkActor::RebuildBlockingCollision(const FPSChunkData& ChunkData, const int32 ChunkSize, const float CellSize)
@@ -271,7 +351,8 @@ void APSTileChunkActor::ApplyMaterials()
 		UHierarchicalInstancedStaticMeshComponent* Instances,
 		UStaticMesh* Mesh,
 		UMaterialInterface* Material,
-		const FLinearColor& DefaultColor)
+		const FLinearColor& DefaultColor,
+		UTexture2D* Texture = nullptr)
 	{
 		Instances->SetStaticMesh(Mesh);
 		if (!Material)
@@ -281,11 +362,20 @@ void APSTileChunkActor::ApplyMaterials()
 
 		UMaterialInstanceDynamic* DynamicMaterial = UMaterialInstanceDynamic::Create(Material, this);
 		DynamicMaterial->SetVectorParameterValue(TEXT("Color"), DefaultColor);
+		if (Texture)
+		{
+			DynamicMaterial->SetTextureParameterValue(TEXT("SpriteTexture"), Texture);
+		}
 		Instances->SetMaterial(0, DynamicMaterial);
 	};
 
 	ApplyMaterial(GrassInstances, TileMesh, GrassMaterial, FLinearColor(0.12f, 0.45f, 0.08f));
-	ApplyMaterial(DirtInstances, TileMesh, DirtMaterial, FLinearColor(0.38f, 0.16f, 0.05f));
+	ApplyMaterial(
+		DirtInstances,
+		TileMesh,
+		DirtTexture && DirtTextureMaterial ? DirtTextureMaterial : DirtMaterial,
+		FLinearColor::White,
+		DirtTexture);
 	ApplyMaterial(TilledSoilInstances, TileMesh, DirtMaterial, FLinearColor(0.25f, 0.10f, 0.03f));
 	ApplyMaterial(StoneInstances, TileMesh, StoneMaterial, FLinearColor(0.35f, 0.37f, 0.4f));
 	ApplyMaterial(CopperOreInstances, TileMesh, StoneMaterial, FLinearColor(0.72f, 0.30f, 0.14f));

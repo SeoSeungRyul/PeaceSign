@@ -10,6 +10,7 @@
 
 class APSTileChunkActor;
 class UPSGameTimeSubsystem;
+class UPSDirtAutoTileSet;
 
 UCLASS()
 class PEACESIGN_API APSGridWorld : public AActor
@@ -127,6 +128,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Rendering")
 	TSubclassOf<APSTileChunkActor> ChunkActorClass;
 
+	/** Optional rule override. The imported Dirt Set1-6 textures are used when this is unset. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Rendering")
+	TObjectPtr<UPSDirtAutoTileSet> DirtAutoTileSet;
+
 #if WITH_EDITORONLY_DATA
 	UPROPERTY(EditAnywhere, Category = "Grid World|Editor Preview", meta = (ClampMin = "1", ClampMax = "128"))
 	int32 EditorPreviewHalfExtentInCells = 50;
@@ -150,10 +155,13 @@ private:
 	EPSTileType GenerateGroundTile(FIntPoint Cell) const;
 	EPSMineralType GenerateMineralType(FIntPoint Cell) const;
 	FPSChunkData GenerateChunk(FIntPoint ChunkCoordinate) const;
+	FPSChunkData BuildRenderChunkData(FIntPoint ChunkCoordinate, const FPSChunkData& Source) const;
+	uint16 BuildDirtNeighborMask(FIntPoint Cell) const;
 	FPSChunkData& GetOrCreateChunk(FIntPoint ChunkCoordinate);
 	void UpdateActiveChunks(FIntPoint PlayerChunk);
 	void SpawnChunkRenderer(FIntPoint ChunkCoordinate);
 	void RebuildChunk(FIntPoint ChunkCoordinate);
+	void RebuildChunksAroundCell(FIntPoint Cell);
 	bool SetGroundTile(FIntPoint Cell, EPSTileType GroundType);
 	bool SetCropType(FIntPoint Cell, EPSCropType CropType, int32 CropId = -1);
 	bool IsCellInsideWorld(FIntPoint Cell) const;

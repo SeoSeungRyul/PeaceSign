@@ -1,4 +1,5 @@
 #include "PSInventoryWidget.h"
+#include "PSHotbarWidget.h"
 #include "../PSPlayerController.h"
 #include "../Inventory/PSInventoryComponent.h"
 #include "Blueprint/WidgetTree.h"
@@ -63,7 +64,7 @@ void UPSInventoryWidget::NativeOnInitialized()
 	ScaleSlot->SetOffsets(FMargin(32));
 	auto* Size = WidgetTree->ConstructWidget<USizeBox>();
 	Size->SetWidthOverride(1100);
-	Size->SetHeightOverride(680);
+	Size->SetHeightOverride(800);
 	Scale->SetContent(Size);
 	auto* Frame = WidgetTree->ConstructWidget<UBorder>();
 	Frame->SetBrushColor(Hex(TEXT("3E2720")));
@@ -86,11 +87,16 @@ void UPSInventoryWidget::NativeOnInitialized()
 	Close->SetContent(Label(WidgetTree, TEXT("  닫기  [I / Esc]  "), 15, Hex(TEXT("FFF0D1"))));
 	Close->OnClicked.AddDynamic(this, &ThisClass::CloseInventory);
 	Header->AddChildToHorizontalBox(Close)->SetVerticalAlignment(VAlign_Center);
-	Rows->AddChildToVerticalBox(Label(WidgetTree, TEXT("가방과 화면 아래 단축 슬롯 사이로 아이템을 옮길 수 있습니다."), 14, Hex(TEXT("C6B59B"))))->SetPadding(FMargin(0, 12, 0, 22));
+	Rows->AddChildToVerticalBox(Label(WidgetTree, TEXT("가방과 위 Hotbar 사이로 아이템을 옮길 수 있습니다."), 14, Hex(TEXT("C6B59B"))))->SetPadding(FMargin(0, 12, 0, 22));
 	auto* Body = WidgetTree->ConstructWidget<UHorizontalBox>();
 	Rows->AddChildToVerticalBox(Body)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
 	auto* Bag = WidgetTree->ConstructWidget<UVerticalBox>();
 	Body->AddChildToHorizontalBox(Bag)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+	Bag->AddChildToVerticalBox(Label(WidgetTree, TEXT("HOTBAR   /   1~0 빠른 선택"), 13, Hex(TEXT("BDA687"))))->SetPadding(FMargin(0, 0, 0, 8));
+	HotbarHost = WidgetTree->ConstructWidget<USizeBox>();
+	HotbarHost->SetWidthOverride(700.0f);
+	HotbarHost->SetHeightOverride(78.0f);
+	Bag->AddChildToVerticalBox(HotbarHost)->SetPadding(FMargin(0, 0, 0, 18));
 	CapacityLabel = Label(WidgetTree, TEXT(""), 16, Hex(TEXT("EAD2AC")));
 	Bag->AddChildToVerticalBox(CapacityLabel)->SetPadding(FMargin(0, 0, 0, 14));
 	auto* Grid = WidgetTree->ConstructWidget<UUniformGridPanel>();
@@ -209,6 +215,23 @@ UTexture2D* UPSInventoryWidget::GetItemIcon(const FPSItemStack& Item) const
 		if (UTexture2D* FishIcon = Controller->GetItemIcon(Item)) return FishIcon;
 	const TObjectPtr<UTexture2D>* IconTexture = ItemIcons.Find(Item.ItemType);
 	return IconTexture ? IconTexture->Get() : nullptr;
+}
+
+void UPSInventoryWidget::AttachHotbar(UPSHotbarWidget* InHotbar)
+{
+	if (!HotbarHost || !InHotbar || HostedHotbar == InHotbar) return;
+	if (HostedHotbar) DetachHotbar();
+	InHotbar->RemoveFromParent();
+	HotbarHost->SetContent(InHotbar);
+	HostedHotbar = InHotbar;
+}
+
+UPSHotbarWidget* UPSInventoryWidget::DetachHotbar()
+{
+	UPSHotbarWidget* Result = HostedHotbar;
+	if (HotbarHost && Result && Result->GetParent() == HotbarHost) HotbarHost->ClearChildren();
+	HostedHotbar = nullptr;
+	return Result;
 }
 
 void UPSInventoryWidget::RefreshInventory()

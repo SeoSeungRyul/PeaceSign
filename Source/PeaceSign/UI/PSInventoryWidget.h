@@ -7,8 +7,10 @@
 #include "PSInventoryWidget.generated.h"
 
 class UBorder;
+class USizeBox;
 class UTextBlock;
 class UTexture2D;
+class UPSHotbarWidget;
 class UPSInventoryWidget;
 
 UCLASS()
@@ -56,6 +58,9 @@ public:
 	FText GetItemDisplayName(const FPSItemStack& Item) const;
 	FText GetItemDescription(const FPSItemStack& Item) const;
 	UTexture2D* GetItemIcon(const FPSItemStack& Item) const;
+	void AttachHotbar(UPSHotbarWidget* InHotbar);
+	UPSHotbarWidget* DetachHotbar();
+	bool IsHotbarAttached() const { return HostedHotbar != nullptr; }
 	UFUNCTION(BlueprintCallable, Category="Inventory") void CloseInventory();
 	// These brushes accept artist textures in a Widget Blueprint child without changing interaction code.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush SlotBrush;
@@ -71,6 +76,8 @@ private:
 	friend class FPSInventoryPreviewTest;
 	UFUNCTION() void RefreshInventory();
 	UPROPERTY(Transient) TObjectPtr<UPSInventoryComponent> InventoryComponent;
+	UPROPERTY() TObjectPtr<USizeBox> HotbarHost;
+	UPROPERTY() TObjectPtr<UPSHotbarWidget> HostedHotbar;
 	UPROPERTY() TObjectPtr<UTextBlock> DetailName;
 	UPROPERTY() TObjectPtr<UTextBlock> DetailDescription;
 	UPROPERTY() TObjectPtr<UTextBlock> DetailCount;
