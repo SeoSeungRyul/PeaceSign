@@ -24,10 +24,15 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	const FString Slot = TEXT("TillingTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	FindFProperty<FStrProperty>(APSGridWorld::StaticClass(), TEXT("SaveSlotName"))->SetPropertyValue_InContainer(Grid, Slot);
 	TMap<EPSTileType, FIntPoint> Cells;
+	TOptional<FIntPoint> Stone;
 	TArray<FIntPoint> TilledCells;
 	for (int32 Y = -10; Y < 10; ++Y)
 		for (int32 X = -10; X < 10; ++X)
-			Cells.FindOrAdd(Grid->GetGroundTile(FIntPoint(X, Y)), FIntPoint(X, Y));
+		{
+			const FIntPoint Cell(X, Y);
+			if (Grid->GetWorldObjectType(Cell) == EPSWorldObjectType::Stone) Stone = Cell;
+			else Cells.FindOrAdd(Grid->GetGroundTile(Cell), Cell);
+		}
 	for (const EPSTileType Type : {EPSTileType::Grass, EPSTileType::Dirt})
 	{
 		const FIntPoint* Cell = Cells.Find(Type);
@@ -38,12 +43,12 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 		TilledCells.Add(*Cell);
 		TestEqual(TEXT("Repeated tilling is a no-op"), Grid->TillCell(*Cell), EPSTileInteractionResult::NoEffect);
 	}
-	const FIntPoint* Stone = Cells.Find(EPSTileType::Stone);
-	TestNotNull(TEXT("Generated terrain contains stone"), Stone);
-	if (Stone)
+	TestTrue(TEXT("Generated terrain contains a stone object"), Stone.IsSet());
+	if (Stone.IsSet())
 	{
-		TestEqual(TEXT("Hoe cannot mine stone"), Grid->TillCell(*Stone), EPSTileInteractionResult::NoEffect);
-		TestEqual(TEXT("Stone remains stone"), Grid->GetGroundTile(*Stone), EPSTileType::Stone);
+		const EPSTileType GroundBelowStone = Grid->GetGroundTile(Stone.GetValue());
+		TestEqual(TEXT("Hoe cannot till below a stone object"), Grid->TillCell(Stone.GetValue()), EPSTileInteractionResult::NoEffect);
+		TestEqual(TEXT("Stone does not replace its ground"), Grid->GetGroundTile(Stone.GetValue()), GroundBelowStone);
 	}
 	TestEqual(TEXT("Outside world cannot be tilled"), Grid->TillCell(FIntPoint(10000, 10000)), EPSTileInteractionResult::InvalidCell);
 	TestTrue(TEXT("Test found farmland for planting"), !TilledCells.IsEmpty());
@@ -56,9 +61,9 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Removed crop leaves tilled soil empty"), Grid->GetCropType(TilledCells[0]), EPSCropType::None);
 		TestEqual(TEXT("Removed crop can be replanted"), Grid->PlantSeed(TilledCells[0]), EPSTileInteractionResult::Planted);
 	}
-	if (Stone)
+	if (Stone.IsSet())
 	{
-		TestEqual(TEXT("Seed cannot be planted on stone"), Grid->PlantSeed(*Stone), EPSTileInteractionResult::NoEffect);
+		TestEqual(TEXT("Seed cannot be planted below stone"), Grid->PlantSeed(Stone.GetValue()), EPSTileInteractionResult::NoEffect);
 	}
 	TestEqual(TEXT("Outside world cannot be planted"), Grid->PlantSeed(FIntPoint(10000, 10000)), EPSTileInteractionResult::InvalidCell);
 	UPSWorldSaveGame* Saved = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
@@ -82,7 +87,9 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	Chunk.Cells.SetNum(4);
 	Chunk.Cells[0].GroundType = EPSTileType::Grass;
 	Chunk.Cells[1].GroundType = EPSTileType::Dirt;
-	Chunk.Cells[2].GroundType = EPSTileType::Stone;
+	Chunk.Cells[2].GroundType = EPSTileType::Grass;
+	Chunk.Cells[2].ObjectType = EPSWorldObjectType::Stone;
+	Chunk.Cells[2].ObjectHealth = APSGridWorld::DefaultStoneHealth;
 	Chunk.Cells[3].GroundType = EPSTileType::TilledSoil;
 	Chunk.Cells[3].CropType = EPSCropType::TestCrop;
 	Renderer->Rebuild(Chunk, 2, 100.0f);
@@ -92,7 +99,8 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	const auto ExpectedInstances = [](const UHierarchicalInstancedStaticMeshComponent* Component)
 	{
 		const FName Name = Component->GetFName();
-		return Name == TEXT("GrassInstances") || Name == TEXT("DirtInstances")
+		if (Name == TEXT("GrassInstances")) return 2;
+		return Name == TEXT("DirtInstances")
 			|| Name == TEXT("StoneInstances") || Name == TEXT("TilledSoilInstances")
 			|| Name == TEXT("SeedInstances") ? 1 : 0;
 	};
@@ -141,13 +149,16 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 	TArray<FIntPoint> Cells;
 	for (int32 Y = -10; Y < 10 && Cells.Num() < 2; ++Y)
 		for (int32 X = -10; X < 10 && Cells.Num() < 2; ++X)
-			if (Grid->GetGroundTile(FIntPoint(X, Y)) == EPSTileType::Grass) Cells.Add(FIntPoint(X, Y));
+			if (Grid->GetGroundTile(FIntPoint(X, Y)) == EPSTileType::Grass
+				&& Grid->GetWorldObjectType(FIntPoint(X, Y)) == EPSWorldObjectType::None)
+				Cells.Add(FIntPoint(X, Y));
 	if (!TestEqual(TEXT("Two farm cells are available"), Cells.Num(), 2))
 	{
 		World->DestroyWorld(false);
 		return false;
 	}
-	for (const FIntPoint Cell : Cells) Grid->TillCell(Cell);
+	for (const FIntPoint Cell : Cells)
+		TestEqual(TEXT("Unoccupied farm ground can be tilled"), Grid->TillCell(Cell), EPSTileInteractionResult::Tilled);
 
 	Controller->SelectHotbarSlot(0);
 	TestEqual(TEXT("Slot one equips its hoe"), Controller->GetEquipment(), EPSEquipment::Hoe);

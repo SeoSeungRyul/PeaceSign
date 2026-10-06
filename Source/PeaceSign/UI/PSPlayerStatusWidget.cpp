@@ -150,7 +150,7 @@ void UPSPlayerStatusWidget::RefreshStats()
 {
 	if (Bars.Num() != 4 || Labels.Num() != 4) return;
 	const float Values[] = {Stats ? Stats->Health : 0.0f, Stats ? Stats->Stamina : 0.0f, Stats ? Stats->Hunger : 0.0f, Stats ? Stats->MentalHealth : 0.0f};
-	const float Maxima[] = {Stats ? Stats->MaxHealth : 100.0f, Stats ? Stats->MaxStamina : 100.0f, 100.0f, 100.0f};
+	const float Maxima[] = {Stats ? Stats->MaxHealth : 100.0f, Stats ? Stats->MaxStamina : 100.0f, 100.0f, Stats ? Stats->MaxMentalHealth : 100.0f};
 	const TCHAR* Names[] = {TEXT("HP"), TEXT("SP"), TEXT("Hunger"), TEXT("Mental")};
 	for (int32 Index = 0; Index < 4; ++Index)
 	{

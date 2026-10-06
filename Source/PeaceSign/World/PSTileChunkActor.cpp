@@ -59,6 +59,11 @@ APSTileChunkActor::APSTileChunkActor()
 	{
 		SeedMesh = DefaultSeedMesh.Object;
 	}
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> DefaultMineableObjectMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
+	if (DefaultMineableObjectMesh.Succeeded())
+	{
+		MineableObjectMesh = DefaultMineableObjectMesh.Object;
+	}
 
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> DefaultTileMaterial(
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
@@ -97,6 +102,12 @@ APSTileChunkActor::APSTileChunkActor()
 	ConfigureInstances(TilledSoilInstances);
 	ConfigureInstances(SeedInstances);
 	SeedInstances->SetStaticMesh(SeedMesh);
+	for (UHierarchicalInstancedStaticMeshComponent* ObjectInstances : {
+		StoneInstances, CopperOreInstances, IronOreInstances, SilverOreInstances, GoldOreInstances,
+		TitaniumOreInstances, LumistoneOreInstances, AsteriumOreInstances})
+	{
+		ObjectInstances->SetStaticMesh(MineableObjectMesh);
+	}
 }
 
 void APSTileChunkActor::OnConstruction(const FTransform& Transform)
@@ -166,36 +177,26 @@ void APSTileChunkActor::Rebuild(
 		for (int32 LocalX = 0; LocalX < ChunkSize; ++LocalX)
 		{
 			const FPSTileCell& Cell = ChunkData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
-			TArray<FTransform>* TargetTransforms = nullptr;
+			TArray<FTransform>* GroundTargetTransforms = nullptr;
 			const bool bUsesDirtVariant = Cell.Variant != PSDirtAutoTile::NoVariant
 				&& (Cell.GroundType == EPSTileType::Grass || Cell.GroundType == EPSTileType::Dirt);
 			switch (Cell.GroundType)
 			{
 			case EPSTileType::Grass:
-				if (!bUsesDirtVariant) TargetTransforms = &GrassTransforms;
+				if (!bUsesDirtVariant) GroundTargetTransforms = &GrassTransforms;
 				break;
 			case EPSTileType::Dirt:
-				if (!bUsesDirtVariant) TargetTransforms = &DirtTransforms;
+				if (!bUsesDirtVariant) GroundTargetTransforms = &DirtTransforms;
 				break;
 			case EPSTileType::TilledSoil:
-				TargetTransforms = &TilledSoilTransforms;
+				GroundTargetTransforms = &TilledSoilTransforms;
 				break;
 			case EPSTileType::Stone:
-				switch (Cell.MineralType)
-				{
-				case EPSMineralType::Copper: TargetTransforms = &CopperOreTransforms; break;
-				case EPSMineralType::Iron: TargetTransforms = &IronOreTransforms; break;
-				case EPSMineralType::Silver: TargetTransforms = &SilverOreTransforms; break;
-				case EPSMineralType::Gold: TargetTransforms = &GoldOreTransforms; break;
-				case EPSMineralType::Titanium: TargetTransforms = &TitaniumOreTransforms; break;
-				case EPSMineralType::Lumistone: TargetTransforms = &LumistoneOreTransforms; break;
-				case EPSMineralType::Asterium: TargetTransforms = &AsteriumOreTransforms; break;
-				case EPSMineralType::None:
-				default: TargetTransforms = &StoneTransforms; break;
-				}
+				// Legacy runtime data still gets a dirt floor below its migrated stone object.
+				GroundTargetTransforms = &DirtTransforms;
 				break;
 			case EPSTileType::Water:
-				TargetTransforms = &WaterTransforms;
+				GroundTargetTransforms = &WaterTransforms;
 				break;
 			default:
 				break;
@@ -210,9 +211,28 @@ void APSTileChunkActor::Rebuild(
 				DirtVariantTransforms.FindOrAdd(Cell.Variant).Emplace(
 					FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
 			}
-			else if (TargetTransforms)
+			else if (GroundTargetTransforms)
 			{
-				TargetTransforms->Emplace(FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
+				GroundTargetTransforms->Emplace(FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
+			}
+
+			if (Cell.ObjectType == EPSWorldObjectType::Stone || Cell.GroundType == EPSTileType::Stone)
+			{
+				TArray<FTransform>* ObjectTransforms = &StoneTransforms;
+				switch (Cell.MineralType)
+				{
+				case EPSMineralType::Copper: ObjectTransforms = &CopperOreTransforms; break;
+				case EPSMineralType::Iron: ObjectTransforms = &IronOreTransforms; break;
+				case EPSMineralType::Silver: ObjectTransforms = &SilverOreTransforms; break;
+				case EPSMineralType::Gold: ObjectTransforms = &GoldOreTransforms; break;
+				case EPSMineralType::Titanium: ObjectTransforms = &TitaniumOreTransforms; break;
+				case EPSMineralType::Lumistone: ObjectTransforms = &LumistoneOreTransforms; break;
+				case EPSMineralType::Asterium: ObjectTransforms = &AsteriumOreTransforms; break;
+				default: break;
+				}
+				const FVector ObjectLocation = GroundLocation + FVector(0, 0, 30.0f * TileScale);
+				ObjectTransforms->Emplace(FRotator::ZeroRotator, ObjectLocation,
+					FVector(TileScale * 0.55f, TileScale * 0.55f, TileScale * 0.35f));
 			}
 			if (Cell.CropType != EPSCropType::None)
 			{
@@ -308,7 +328,9 @@ void APSTileChunkActor::RebuildBlockingCollision(const FPSChunkData& ChunkData, 
 
 	const auto BlocksPawn = [](const FPSTileCell& Cell)
 	{
-		return Cell.GroundType == EPSTileType::Water || Cell.GroundType == EPSTileType::Stone;
+		return Cell.GroundType == EPSTileType::Water
+			|| Cell.ObjectType == EPSWorldObjectType::Stone
+			|| Cell.GroundType == EPSTileType::Stone;
 	};
 	// Merge consecutive blocking cells in each row. Rebuilds split the span immediately
 	// when mining changes a stone cell into dirt.
@@ -377,14 +399,14 @@ void APSTileChunkActor::ApplyMaterials()
 		FLinearColor::White,
 		DirtTexture);
 	ApplyMaterial(TilledSoilInstances, TileMesh, DirtMaterial, FLinearColor(0.25f, 0.10f, 0.03f));
-	ApplyMaterial(StoneInstances, TileMesh, StoneMaterial, FLinearColor(0.35f, 0.37f, 0.4f));
-	ApplyMaterial(CopperOreInstances, TileMesh, StoneMaterial, FLinearColor(0.72f, 0.30f, 0.14f));
-	ApplyMaterial(IronOreInstances, TileMesh, StoneMaterial, FLinearColor(0.25f, 0.27f, 0.30f));
-	ApplyMaterial(SilverOreInstances, TileMesh, StoneMaterial, FLinearColor(0.75f, 0.80f, 0.86f));
-	ApplyMaterial(GoldOreInstances, TileMesh, StoneMaterial, FLinearColor(0.95f, 0.62f, 0.08f));
-	ApplyMaterial(TitaniumOreInstances, TileMesh, StoneMaterial, FLinearColor(0.42f, 0.60f, 0.72f));
-	ApplyMaterial(LumistoneOreInstances, TileMesh, StoneMaterial, FLinearColor(0.25f, 0.95f, 0.75f));
-	ApplyMaterial(AsteriumOreInstances, TileMesh, StoneMaterial, FLinearColor(0.70f, 0.45f, 0.95f));
+	ApplyMaterial(StoneInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.35f, 0.37f, 0.4f));
+	ApplyMaterial(CopperOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.72f, 0.30f, 0.14f));
+	ApplyMaterial(IronOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.25f, 0.27f, 0.30f));
+	ApplyMaterial(SilverOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.75f, 0.80f, 0.86f));
+	ApplyMaterial(GoldOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.95f, 0.62f, 0.08f));
+	ApplyMaterial(TitaniumOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.42f, 0.60f, 0.72f));
+	ApplyMaterial(LumistoneOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.25f, 0.95f, 0.75f));
+	ApplyMaterial(AsteriumOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.70f, 0.45f, 0.95f));
 	ApplyMaterial(WaterInstances, TileMesh, StoneMaterial, FLinearColor(0.02f, 0.3f, 0.9f));
 	ApplyMaterial(SeedInstances, SeedMesh, GrassMaterial, FLinearColor(0.45f, 0.24f, 0.06f));
 }

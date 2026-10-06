@@ -33,14 +33,17 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 		for (int32 X = -49; X < 50 && !bFoundStone; ++X)
 		{
 			StoneCell = FIntPoint(X, Y);
-			bFoundStone = Grid->GetGroundTile(StoneCell) == EPSTileType::Stone
+			bFoundStone = Grid->GetWorldObjectType(StoneCell) == EPSWorldObjectType::Stone
 				&& Grid->GetMineralType(StoneCell) == EPSMineralType::None;
 		}
-	if (!TestTrue(TEXT("Generated terrain contains a stone tile"), bFoundStone))
+	if (!TestTrue(TEXT("Generated terrain contains a stone object"), bFoundStone))
 	{
 		World->DestroyWorld(false);
 		return false;
 	}
+	const EPSTileType GroundBelowStone = Grid->GetGroundTile(StoneCell);
+	TestTrue(TEXT("Stone object is placed above grass or dirt"),
+		GroundBelowStone == EPSTileType::Grass || GroundBelowStone == EPSTileType::Dirt);
 	FIntPoint AdjacentLand = FIntPoint::ZeroValue;
 	bool bFoundAdjacentLand = false;
 	for (const FIntPoint Offset : {FIntPoint(1, 0), FIntPoint(-1, 0), FIntPoint(0, 1), FIntPoint(0, -1),
@@ -142,7 +145,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Bare-hand hit removes ten health"), Grid->GetStoneHealth(StoneCell), 20);
 	if (UPSWorldSaveGame* PartialSave = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0)))
 	{
-		TestEqual(TEXT("Mining save uses the mineral data version"), PartialSave->DataVersion, 2);
+		TestEqual(TEXT("Mining save uses the object-layer data version"), PartialSave->DataVersion, 3);
 		const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(StoneCell, Grid->ChunkSize);
 		const FPSChunkSaveData* PartialChunk = PartialSave->ModifiedChunks.FindByPredicate(
 			[ChunkCoordinate](const FPSChunkSaveData& Chunk) { return Chunk.Coordinate == ChunkCoordinate; });
@@ -150,7 +153,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 		if (PartialChunk)
 		{
 			const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(StoneCell, Grid->ChunkSize), Grid->ChunkSize);
-			TestEqual(TEXT("Partial stone health is saved"), PartialChunk->Cells[Index].StoneHealth, 20);
+			TestEqual(TEXT("Partial stone object health is saved"), PartialChunk->Cells[Index].ObjectHealth, 20);
 		}
 	}
 	else
@@ -169,7 +172,9 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	for (TActorIterator<APSWorldItemActor> It(World); It; ++It) ++DropsBefore;
 	TestEqual(TEXT("Third hit destroys stone"), Controller->UseEquippedItemOnCell(StoneCell),
 		EPSTileInteractionResult::Mined);
-	TestEqual(TEXT("Destroyed stone exposes dirt"), Grid->GetGroundTile(StoneCell), EPSTileType::Dirt);
+	TestEqual(TEXT("Destroyed stone preserves its underlying ground"), Grid->GetGroundTile(StoneCell), GroundBelowStone);
+	TestEqual(TEXT("Destroyed stone clears only the object layer"),
+		Grid->GetWorldObjectType(StoneCell), EPSWorldObjectType::None);
 	TestEqual(TEXT("Destroyed stone has no health"), Grid->GetStoneHealth(StoneCell), 0);
 	TestFalse(TEXT("Mined dirt no longer blocks pawn movement"), IsCellPawnBlocked(StoneCell));
 	TestEqual(TEXT("Destroyed stone is added directly to inventory"),
@@ -199,8 +204,10 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 		if (SavedChunk)
 		{
 			const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(StoneCell, Grid->ChunkSize), Grid->ChunkSize);
-			TestEqual(TEXT("Saved stone remains destroyed"), SavedChunk->Cells[Index].GroundType, EPSTileType::Dirt);
-			TestEqual(TEXT("Saved destroyed stone has zero health"), SavedChunk->Cells[Index].StoneHealth, 0);
+			TestEqual(TEXT("Saved ground below stone is preserved"), SavedChunk->Cells[Index].GroundType, GroundBelowStone);
+			TestEqual(TEXT("Saved stone object remains destroyed"),
+				SavedChunk->Cells[Index].ObjectType, EPSWorldObjectType::None);
+			TestEqual(TEXT("Saved destroyed stone has zero health"), SavedChunk->Cells[Index].ObjectHealth, 0);
 		}
 	}
 	APSGridWorld* RestoredGrid = World->SpawnActorDeferred<APSGridWorld>(
@@ -208,12 +215,16 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	RestoredGrid->SaveSlotName = Slot;
 	RestoredGrid->FinishSpawning(FTransform(FVector(100000, 0, 0)));
 	RestoredGrid->LoadWorld();
-	TestEqual(TEXT("Reloaded world keeps the stone destroyed"),
-		RestoredGrid->GetGroundTile(StoneCell), EPSTileType::Dirt);
+	TestEqual(TEXT("Reloaded world preserves the ground below the destroyed stone"),
+		RestoredGrid->GetGroundTile(StoneCell), GroundBelowStone);
+	TestEqual(TEXT("Reloaded world keeps the stone object destroyed"),
+		RestoredGrid->GetWorldObjectType(StoneCell), EPSWorldObjectType::None);
 	TestEqual(TEXT("Reloaded destroyed stone has no health"), RestoredGrid->GetStoneHealth(StoneCell), 0);
 
 	TestTrue(TEXT("Development reset succeeds"), Grid->ResetWorld());
-	TestEqual(TEXT("Reset regenerates the original stone tile"), Grid->GetGroundTile(StoneCell), EPSTileType::Stone);
+	TestEqual(TEXT("Reset preserves the original underlying ground"), Grid->GetGroundTile(StoneCell), GroundBelowStone);
+	TestEqual(TEXT("Reset regenerates the original stone object"),
+		Grid->GetWorldObjectType(StoneCell), EPSWorldObjectType::Stone);
 	TestEqual(TEXT("Reset restores full stone health"), Grid->GetStoneHealth(StoneCell), 30);
 	TestTrue(TEXT("Reset stone blocks pawn movement again"), IsCellPawnBlocked(StoneCell));
 	if (StoneInstances)
@@ -225,14 +236,14 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	FreshGrid->SaveSlotName = Slot;
 	FreshGrid->FinishSpawning(FTransform(FVector(200000, 0, 0)));
 	FreshGrid->LoadWorld();
-	TestEqual(TEXT("A new world instance after reset generates the original stone"),
-		FreshGrid->GetGroundTile(StoneCell), EPSTileType::Stone);
+	TestEqual(TEXT("A new world instance after reset generates the original stone object"),
+		FreshGrid->GetWorldObjectType(StoneCell), EPSWorldObjectType::Stone);
 
 	FPSChunkData& OreChunk = Grid->GetOrCreateChunk(StoneChunk);
 	const int32 OreIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(StoneCell, Grid->ChunkSize), Grid->ChunkSize);
-	OreChunk.Cells[OreIndex].GroundType = EPSTileType::Stone;
+	OreChunk.Cells[OreIndex].ObjectType = EPSWorldObjectType::Stone;
 	OreChunk.Cells[OreIndex].MineralType = EPSMineralType::Copper;
-	OreChunk.Cells[OreIndex].StoneHealth = APSGridWorld::GetStoneMaxHealth(EPSMineralType::Copper);
+	OreChunk.Cells[OreIndex].ObjectHealth = APSGridWorld::GetStoneMaxHealth(EPSMineralType::Copper);
 	Grid->RebuildChunk(StoneChunk);
 	TestEqual(TEXT("Copper is applied to the tile data"), Grid->GetMineralType(StoneCell), EPSMineralType::Copper);
 	TestEqual(TEXT("Copper tile receives base plus mineral HP"), Grid->GetStoneHealth(StoneCell), 45);
@@ -260,7 +271,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("Copper mineral type is saved"),
 				SavedOreChunk->Cells[OreIndex].MineralType, EPSMineralType::Copper);
-			TestEqual(TEXT("Copper remaining HP is saved"), SavedOreChunk->Cells[OreIndex].StoneHealth, 35);
+			TestEqual(TEXT("Copper remaining HP is saved"), SavedOreChunk->Cells[OreIndex].ObjectHealth, 35);
 		}
 	}
 	APSGridWorld* RestoredCopperGrid = World->SpawnActorDeferred<APSGridWorld>(
@@ -281,9 +292,9 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Destroyed copper disappears from its renderer"),
 			CopperOreInstances->GetInstanceCount(), CopperInstancesBeforeMining - 1);
 
-	OreChunk.Cells[OreIndex].GroundType = EPSTileType::Stone;
+	OreChunk.Cells[OreIndex].ObjectType = EPSWorldObjectType::Stone;
 	OreChunk.Cells[OreIndex].MineralType = EPSMineralType::Copper;
-	OreChunk.Cells[OreIndex].StoneHealth = APSGridWorld::GetStoneMaxHealth(EPSMineralType::Copper);
+	OreChunk.Cells[OreIndex].ObjectHealth = APSGridWorld::GetStoneMaxHealth(EPSMineralType::Copper);
 	Grid->RebuildChunk(StoneChunk);
 	Controller->SelectHotbarSlot(4);
 	const int32 CopperOreBeforeBareHands = CountCopperOre();

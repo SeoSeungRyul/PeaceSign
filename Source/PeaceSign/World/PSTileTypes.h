@@ -11,9 +11,18 @@ enum class EPSTileType : uint8
 	Empty,
 	Grass,
 	Dirt,
-	Stone,
+	/** Legacy save value. Mineable rocks now live in the object layer. */
+	Stone UMETA(Hidden),
 	TilledSoil,
 	Water
+};
+
+/** Occupant rendered and interacted with independently from the ground tile. */
+UENUM(BlueprintType)
+enum class EPSWorldObjectType : uint8
+{
+	None,
+	Stone
 };
 
 UENUM(BlueprintType)
@@ -75,7 +84,14 @@ struct FPSTileCell
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSTileType GroundType = EPSTileType::Grass;
 
-	/** Remaining durability for a stone tile. Zero is also used by legacy, uninitialized stone saves. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	EPSWorldObjectType ObjectType = EPSWorldObjectType::None;
+
+	/** Remaining durability for the object occupying this cell. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "0"))
+	int32 ObjectHealth = 0;
+
+	/** Kept only so version 0-2 saves can migrate their old stone-tile health. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "0"))
 	int32 StoneHealth = 0;
 
