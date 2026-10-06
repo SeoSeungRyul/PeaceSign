@@ -71,6 +71,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals")
 	TObjectPtr<UStaticMesh> SeedMesh;
 
+	/** Mesh used by stones and ore objects placed above the ground layer. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals")
+	TObjectPtr<UStaticMesh> MineableObjectMesh;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals")
 	TObjectPtr<UMaterialInterface> GrassMaterial;
 
@@ -98,7 +102,7 @@ private:
 	UPROPERTY(Transient)
 	TMap<uint8, TObjectPtr<UMaterialInstanceDynamic>> DirtVariantMaterials;
 
-	// Separate collision volumes keep flat water and mineable tile visuals unchanged.
+	// Separate collision volumes keep flat water and mineable object visuals unchanged.
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UBoxComponent>> BlockingTileColliders;
 	void RebuildBlockingCollision(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize);

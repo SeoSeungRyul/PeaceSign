@@ -13,7 +13,7 @@
 
 namespace
 {
-	constexpr int32 CurrentWorldSaveVersion = 2;
+	constexpr int32 CurrentWorldSaveVersion = 3;
 	constexpr int32 LegacyStoneHealthScale = 10;
 
 	uint32 HashCell(const FIntPoint Cell, const int32 Seed)
@@ -191,25 +191,37 @@ EPSTileType APSGridWorld::GetGroundTile(const FIntPoint Cell) const
 
 int32 APSGridWorld::GetStoneHealth(const FIntPoint Cell) const
 {
-	if (GetGroundTile(Cell) != EPSTileType::Stone) return 0;
+	if (GetWorldObjectType(Cell) != EPSWorldObjectType::Stone) return 0;
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
 	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
 	{
 		if (Chunk->Cells.IsValidIndex(CellIndex))
-			return FMath::Max(1, Chunk->Cells[CellIndex].StoneHealth);
+			return FMath::Max(1, Chunk->Cells[CellIndex].ObjectHealth);
 	}
 	if (const FPSChunkSaveData* Chunk = ModifiedChunks.Find(ChunkCoordinate))
 	{
 		if (Chunk->Cells.IsValidIndex(CellIndex))
-			return FMath::Max(1, Chunk->Cells[CellIndex].StoneHealth);
+			return FMath::Max(1, Chunk->Cells[CellIndex].ObjectHealth);
 	}
 	return GetStoneMaxHealth(GenerateMineralType(Cell));
 }
 
+EPSWorldObjectType APSGridWorld::GetWorldObjectType(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell)) return EPSWorldObjectType::None;
+	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].ObjectType : EPSWorldObjectType::None;
+	if (const FPSChunkSaveData* Chunk = ModifiedChunks.Find(ChunkCoordinate))
+		return Chunk->Cells.IsValidIndex(CellIndex) ? Chunk->Cells[CellIndex].ObjectType : EPSWorldObjectType::None;
+	return GenerateWorldObjectType(Cell);
+}
+
 EPSMineralType APSGridWorld::GetMineralType(const FIntPoint Cell) const
 {
-	if (GetGroundTile(Cell) != EPSTileType::Stone) return EPSMineralType::None;
+	if (GetWorldObjectType(Cell) != EPSWorldObjectType::Stone) return EPSMineralType::None;
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
 	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
@@ -243,29 +255,32 @@ bool APSGridWorld::CanMineFrom(const FIntPoint PlayerCell, const FIntPoint Stone
 	const int32 DY = FMath::Abs(PlayerCell.Y - StoneCell.Y);
 	return PlayerGround != EPSTileType::Empty && PlayerGround != EPSTileType::Water
 		&& DX + DY >= 1 && DX + DY <= 2
-		&& GetGroundTile(StoneCell) == EPSTileType::Stone;
+		&& GetWorldObjectType(StoneCell) == EPSWorldObjectType::Stone;
 }
 
 EPSTileInteractionResult APSGridWorld::MineCell(const FIntPoint Cell, const int32 Damage)
 {
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
-	if (GetGroundTile(Cell) != EPSTileType::Stone || Damage <= 0)
+	if (GetWorldObjectType(Cell) != EPSWorldObjectType::Stone || Damage <= 0)
 		return EPSTileInteractionResult::NoEffect;
 
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[CellIndex];
-	if (Tile.StoneHealth <= 0) Tile.StoneHealth = GetStoneMaxHealth(Tile.MineralType);
-	Tile.StoneHealth = FMath::Max(0, Tile.StoneHealth - Damage);
-	const bool bDestroyed = Tile.StoneHealth == 0;
-	if (bDestroyed) Tile.GroundType = EPSTileType::Dirt;
+	if (Tile.ObjectHealth <= 0) Tile.ObjectHealth = GetStoneMaxHealth(Tile.MineralType);
+	Tile.ObjectHealth = FMath::Max(0, Tile.ObjectHealth - Damage);
+	const bool bDestroyed = Tile.ObjectHealth == 0;
+	if (bDestroyed)
+	{
+		Tile.ObjectType = EPSWorldObjectType::None;
+		Tile.MineralType = EPSMineralType::None;
+	}
 
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
-	if (bDestroyed) RebuildChunksAroundCell(Cell);
-	else RebuildChunk(ChunkCoordinate);
+	RebuildChunk(ChunkCoordinate);
 	SaveWorld();
 	return bDestroyed ? EPSTileInteractionResult::Mined : EPSTileInteractionResult::StoneDamaged;
 }
@@ -312,6 +327,7 @@ int32 APSGridWorld::GetFishingLocationId(const FIntPoint WaterCell) const
 
 EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 {
+	if (GetWorldObjectType(Cell) != EPSWorldObjectType::None) return EPSTileInteractionResult::NoEffect;
 	switch (GetGroundTile(Cell))
 	{
 	case EPSTileType::Grass:
@@ -319,7 +335,6 @@ EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 		return SetGroundTile(Cell, EPSTileType::TilledSoil)
 			? EPSTileInteractionResult::Tilled
 			: EPSTileInteractionResult::NoEffect;
-	case EPSTileType::Stone:
 	case EPSTileType::Water:
 	case EPSTileType::TilledSoil:
 		return EPSTileInteractionResult::NoEffect;
@@ -345,7 +360,9 @@ EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell, const int
 {
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
 	if (CropId < 0) return EPSTileInteractionResult::NoEffect;
-	if (GetGroundTile(Cell) != EPSTileType::TilledSoil || GetCropType(Cell) != EPSCropType::None)
+	if (GetGroundTile(Cell) != EPSTileType::TilledSoil
+		|| GetWorldObjectType(Cell) != EPSWorldObjectType::None
+		|| GetCropType(Cell) != EPSCropType::None)
 		return EPSTileInteractionResult::NoEffect;
 	return SetCropType(Cell, EPSCropType::TestCrop, CropId)
 		? EPSTileInteractionResult::Planted
@@ -436,8 +453,13 @@ void APSGridWorld::GenerateEditorPreview()
 		for (int32 LocalX = 0; LocalX < PreviewSize; ++LocalX)
 		{
 			const FIntPoint Cell(LocalX - PreviewHalfExtent, LocalY - PreviewHalfExtent);
-			PreviewData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), PreviewSize)].GroundType =
-				GenerateGroundTile(Cell);
+			FPSTileCell& Tile = PreviewData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), PreviewSize)];
+			Tile.GroundType = GenerateGroundTile(Cell);
+			Tile.ObjectType = GenerateWorldObjectType(Cell);
+			Tile.MineralType = Tile.ObjectType == EPSWorldObjectType::Stone
+				? GenerateMineralType(Cell) : EPSMineralType::None;
+			Tile.ObjectHealth = Tile.ObjectType == EPSWorldObjectType::Stone
+				? GetStoneMaxHealth(Tile.MineralType) : 0;
 		}
 	}
 	for (int32 LocalY = 0; LocalY < PreviewSize; ++LocalY)
@@ -539,6 +561,42 @@ bool APSGridWorld::IsLakeCell(const FIntPoint Cell) const
 	return true;
 }
 
+bool APSGridWorld::IsDirtPatchCell(const FIntPoint Cell) const
+{
+	// Dirt is generated as sparse ellipses instead of independent noisy cells. At the
+	// current settings it covers roughly ten percent of non-water terrain.
+	// Larger patches reduce the cross-shaped silhouette of tiny grid ellipses.
+	// Doubling the region and radii preserves approximately the same patch coverage.
+	constexpr int32 RegionSize = 16;
+	constexpr uint32 PatchChancePercent = 32;
+	const FIntPoint CellRegion = PSGrid::CellToChunk(Cell, RegionSize);
+	for (int32 RegionY = -1; RegionY <= 1; ++RegionY)
+	{
+		for (int32 RegionX = -1; RegionX <= 1; ++RegionX)
+		{
+			const FIntPoint Region = CellRegion + FIntPoint(RegionX, RegionY);
+			const uint32 Hash = HashCell(Region, WorldSeed + 48611);
+			if (Hash % 100 >= PatchChancePercent) continue;
+
+			const FIntPoint Center = Region * RegionSize + FIntPoint(
+				4 + static_cast<int32>((Hash >> 8) % 8),
+				4 + static_cast<int32>((Hash >> 12) % 8));
+			const int32 RadiusX = 4 + static_cast<int32>((Hash >> 16) % 3);
+			const int32 RadiusY = 4 + static_cast<int32>((Hash >> 20) % 3);
+			// Sample cell centers against a patch centered on a grid vertex. This
+			// avoids the single-cell tips produced by integer-centered circles.
+			const int32 DX = 2 * (Cell.X - Center.X) + 1;
+			const int32 DY = 2 * (Cell.Y - Center.Y) + 1;
+			if (DX * DX * RadiusY * RadiusY + DY * DY * RadiusX * RadiusX
+				<= 4 * RadiusX * RadiusX * RadiusY * RadiusY)
+			{
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 {
 	if (!IsCellInsideWorld(Cell))
@@ -547,13 +605,21 @@ EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 	}
 
 	if (IsLakeCell(Cell)) return EPSTileType::Water;
-	const uint32 Roll = HashCell(Cell, WorldSeed) % 100;
-	return Roll < 5 ? EPSTileType::Stone : Roll < 90 ? EPSTileType::Dirt : EPSTileType::Grass;
+	return IsDirtPatchCell(Cell) ? EPSTileType::Dirt : EPSTileType::Grass;
+}
+
+EPSWorldObjectType APSGridWorld::GenerateWorldObjectType(const FIntPoint Cell) const
+{
+	const EPSTileType Ground = GenerateGroundTile(Cell);
+	if (Ground == EPSTileType::Empty || Ground == EPSTileType::Water)
+		return EPSWorldObjectType::None;
+	return HashCell(Cell, WorldSeed) % 100 < 5
+		? EPSWorldObjectType::Stone : EPSWorldObjectType::None;
 }
 
 EPSMineralType APSGridWorld::GenerateMineralType(const FIntPoint Cell) const
 {
-	if (GenerateGroundTile(Cell) != EPSTileType::Stone) return EPSMineralType::None;
+	if (GenerateWorldObjectType(Cell) != EPSWorldObjectType::Stone) return EPSMineralType::None;
 	const int32 Distance = FMath::Max(FMath::Abs(Cell.X), FMath::Abs(Cell.Y));
 	const int32 DistanceBand = FMath::Clamp(
 		Distance * 8 / FMath::Max(1, WorldHalfExtentInCells), 0, 7);
@@ -591,9 +657,10 @@ FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 				ChunkCoordinate.Y * ChunkSize + LocalY);
 			FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
 			Tile.GroundType = GenerateGroundTile(Cell);
-			Tile.MineralType = Tile.GroundType == EPSTileType::Stone
+			Tile.ObjectType = GenerateWorldObjectType(Cell);
+			Tile.MineralType = Tile.ObjectType == EPSWorldObjectType::Stone
 				? GenerateMineralType(Cell) : EPSMineralType::None;
-			Tile.StoneHealth = Tile.GroundType == EPSTileType::Stone
+			Tile.ObjectHealth = Tile.ObjectType == EPSWorldObjectType::Stone
 				? GetStoneMaxHealth(Tile.MineralType) : 0;
 		}
 	}
@@ -609,14 +676,16 @@ uint16 APSGridWorld::BuildDirtNeighborMask(const FIntPoint Cell) const
 	};
 
 	uint16 Mask = IsDirt(Cell) ? PSDirtAutoTile::Center : 0;
-	if (IsDirt(Cell + FIntPoint(0, 1))) Mask |= PSDirtAutoTile::North;
+	// Plane UVs increase U along +X and V along +Y. Image top (V=0)
+	// therefore faces -Y, regardless of the camera's screen orientation.
+	if (IsDirt(Cell + FIntPoint(0, -1))) Mask |= PSDirtAutoTile::North;
 	if (IsDirt(Cell + FIntPoint(1, 0))) Mask |= PSDirtAutoTile::East;
-	if (IsDirt(Cell + FIntPoint(0, -1))) Mask |= PSDirtAutoTile::South;
+	if (IsDirt(Cell + FIntPoint(0, 1))) Mask |= PSDirtAutoTile::South;
 	if (IsDirt(Cell + FIntPoint(-1, 0))) Mask |= PSDirtAutoTile::West;
-	if (IsDirt(Cell + FIntPoint(-1, 1))) Mask |= PSDirtAutoTile::NorthWest;
-	if (IsDirt(Cell + FIntPoint(1, 1))) Mask |= PSDirtAutoTile::NorthEast;
-	if (IsDirt(Cell + FIntPoint(1, -1))) Mask |= PSDirtAutoTile::SouthEast;
-	if (IsDirt(Cell + FIntPoint(-1, -1))) Mask |= PSDirtAutoTile::SouthWest;
+	if (IsDirt(Cell + FIntPoint(-1, -1))) Mask |= PSDirtAutoTile::NorthWest;
+	if (IsDirt(Cell + FIntPoint(1, -1))) Mask |= PSDirtAutoTile::NorthEast;
+	if (IsDirt(Cell + FIntPoint(1, 1))) Mask |= PSDirtAutoTile::SouthEast;
+	if (IsDirt(Cell + FIntPoint(-1, 1))) Mask |= PSDirtAutoTile::SouthWest;
 	return Mask;
 }
 
@@ -756,8 +825,12 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
 	Tile.GroundType = GroundType;
-	Tile.MineralType = EPSMineralType::None;
-	Tile.StoneHealth = GroundType == EPSTileType::Stone ? DefaultStoneHealth : 0;
+	if (GroundType == EPSTileType::Water)
+	{
+		Tile.ObjectType = EPSWorldObjectType::None;
+		Tile.ObjectHealth = 0;
+		Tile.MineralType = EPSMineralType::None;
+	}
 
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
@@ -834,6 +907,8 @@ void APSGridWorld::LoadWorld()
 		for (int32 Index = 0; Index < Restored.Cells.Num(); ++Index)
 		{
 			FPSTileCell& Tile = Restored.Cells[Index];
+			const FIntPoint Cell(Chunk.Coordinate.X * ChunkSize + Index % ChunkSize,
+				Chunk.Coordinate.Y * ChunkSize + Index / ChunkSize);
 			if (Tile.GroundType == EPSTileType::Stone && SaveGame->DataVersion < 1)
 			{
 				Tile.StoneHealth = Tile.StoneHealth > 0
@@ -843,17 +918,36 @@ void APSGridWorld::LoadWorld()
 			if (Tile.GroundType == EPSTileType::Stone && SaveGame->DataVersion < 2)
 			{
 				const int32 PreviousDamage = FMath::Max(0, DefaultStoneHealth - Tile.StoneHealth);
-				const FIntPoint Cell(Chunk.Coordinate.X * ChunkSize + Index % ChunkSize,
-					Chunk.Coordinate.Y * ChunkSize + Index / ChunkSize);
+				Tile.ObjectType = EPSWorldObjectType::Stone;
 				Tile.MineralType = GenerateMineralType(Cell);
 				Tile.StoneHealth = FMath::Max(1, GetStoneMaxHealth(Tile.MineralType) - PreviousDamage);
 			}
-			else if (Tile.GroundType != EPSTileType::Stone)
-				Tile.MineralType = EPSMineralType::None;
-			if (Tile.GroundType == EPSTileType::Stone && Tile.StoneHealth <= 0)
-				Tile.StoneHealth = GetStoneMaxHealth(Tile.MineralType);
-			else if (Tile.GroundType != EPSTileType::Stone)
+			if (SaveGame->DataVersion < 3)
+			{
+				if (Tile.GroundType == EPSTileType::Stone)
+				{
+					Tile.GroundType = GenerateGroundTile(Cell);
+					Tile.ObjectType = EPSWorldObjectType::Stone;
+					Tile.ObjectHealth = Tile.StoneHealth > 0
+						? Tile.StoneHealth : GetStoneMaxHealth(Tile.MineralType);
+				}
+				else
+				{
+					Tile.ObjectType = EPSWorldObjectType::None;
+					Tile.ObjectHealth = 0;
+					Tile.MineralType = EPSMineralType::None;
+				}
 				Tile.StoneHealth = 0;
+			}
+			else if (Tile.ObjectType == EPSWorldObjectType::Stone)
+			{
+				if (Tile.ObjectHealth <= 0) Tile.ObjectHealth = GetStoneMaxHealth(Tile.MineralType);
+			}
+			else
+			{
+				Tile.ObjectHealth = 0;
+				Tile.MineralType = EPSMineralType::None;
+			}
 			if (Tile.CropType == EPSCropType::None) continue;
 			Tile.CropId = FMath::Max(0, Tile.CropId);
 			const int64 SavedStageAge = (FMath::Clamp<int32>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage) - 1)
@@ -866,8 +960,6 @@ void APSGridWorld::LoadWorld()
 			Tile.GrowthStage = PSCropGrowth::GetStage(Tile.PlantedHalfHour, Now);
 			if (Tile.GrowthStage < PSCropGrowth::MaxStage)
 			{
-				const FIntPoint Cell(Chunk.Coordinate.X * ChunkSize + Index % ChunkSize,
-					Chunk.Coordinate.Y * ChunkSize + Index / ChunkSize);
 				GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
 			}
 		}

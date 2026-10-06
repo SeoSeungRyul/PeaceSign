@@ -32,6 +32,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSTileType GetGroundTile(FIntPoint Cell) const;
 
+	UFUNCTION(BlueprintPure, Category = "Grid World|Objects")
+	EPSWorldObjectType GetWorldObjectType(FIntPoint Cell) const;
+
 	UFUNCTION(BlueprintPure, Category = "Mining")
 	int32 GetStoneHealth(FIntPoint Cell) const;
 
@@ -141,11 +144,13 @@ protected:
 #endif
 
 private:
+	friend class FPSDirtAutoTileTest;
 	friend class FPSCropGrowthTest;
 	friend class FPSFishingTest;
 	friend class FPSFarmingInventoryTest;
 	friend class FPSMiningTest;
 	bool IsLakeCell(FIntPoint Cell) const;
+	bool IsDirtPatchCell(FIntPoint Cell) const;
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();
 	int64 GetGrowthHalfHour() const;
@@ -153,6 +158,7 @@ private:
 	// Mature crops are omitted. A timestamp bucket shares one growth calculation.
 	TMap<int64, TArray<FIntPoint>> GrowingCrops;
 	EPSTileType GenerateGroundTile(FIntPoint Cell) const;
+	EPSWorldObjectType GenerateWorldObjectType(FIntPoint Cell) const;
 	EPSMineralType GenerateMineralType(FIntPoint Cell) const;
 	FPSChunkData GenerateChunk(FIntPoint ChunkCoordinate) const;
 	FPSChunkData BuildRenderChunkData(FIntPoint ChunkCoordinate, const FPSChunkData& Source) const;

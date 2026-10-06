@@ -25,7 +25,10 @@ bool FPSCropGrowthTest::RunTest(const FString& Parameters)
 	for (int32 X = -10; X < 10 && Cells.Num() < 3; ++X)
 	{
 		const FIntPoint Cell(X, -1);
-		if (Grid->GetGroundTile(Cell) == EPSTileType::Grass) Cells.Add(Cell);
+		const EPSTileType Ground = Grid->GetGroundTile(Cell);
+		if ((Ground == EPSTileType::Grass || Ground == EPSTileType::Dirt)
+			&& Grid->GetWorldObjectType(Cell) == EPSWorldObjectType::None)
+			Cells.Add(Cell);
 	}
 	if (!TestEqual(TEXT("Three tillable cells available"), Cells.Num(), 3)) { World->DestroyWorld(false); return false; }
 	for (FIntPoint Cell : Cells) Grid->TillCell(Cell);

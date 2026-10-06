@@ -83,7 +83,7 @@ namespace
 		case EPSTileInteractionResult::StoneDamaged:
 			return TEXT("Stone damaged");
 		case EPSTileInteractionResult::Mined:
-			return TEXT("Stone mined into dirt");
+			return TEXT("Stone object mined; ground preserved");
 		case EPSTileInteractionResult::Planted:
 			return TEXT("Seed planted");
 		case EPSTileInteractionResult::Harvested:
@@ -299,7 +299,7 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 	const EPSTileType TileType = GridWorld->GetGroundTile(Cell);
 	const FVector CellCenter = GridWorld->CellToWorldCenter(Cell);
 	const float HalfCell = GridWorld->GetCellSize() * 0.48f;
-	const bool bStoneOutOfRange = TileType == EPSTileType::Stone && GetPawn()
+	const bool bStoneOutOfRange = GridWorld->GetWorldObjectType(Cell) == EPSWorldObjectType::Stone && GetPawn()
 		&& !GridWorld->CanMineFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), Cell);
 	FColor HoverColor = GetTileDebugColor(TileType);
 	if (Equipment == EPSEquipment::FishingRod)
@@ -367,7 +367,7 @@ void APSPlayerController::HandleSpecialAttack()
 	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (TargetCell.IsSet())
 	{
-		if (GridWorld && GetPawn() && GridWorld->GetGroundTile(TargetCell.GetValue()) == EPSTileType::Stone
+		if (GridWorld && GetPawn() && GridWorld->GetWorldObjectType(TargetCell.GetValue()) == EPSWorldObjectType::Stone
 			&& !GridWorld->CanMineFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), TargetCell.GetValue()))
 		{
 			if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Red,
@@ -403,7 +403,7 @@ void APSPlayerController::HandleSpecialAttack()
 EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPoint Cell)
 {
 	if (!GridWorld) return EPSTileInteractionResult::InvalidCell;
-	if (GridWorld->GetGroundTile(Cell) == EPSTileType::Stone)
+	if (GridWorld->GetWorldObjectType(Cell) == EPSWorldObjectType::Stone)
 	{
 		const FPSItemStack* EquippedStack = InventoryComponent
 			? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;

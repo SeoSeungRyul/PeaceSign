@@ -33,13 +33,13 @@ namespace
 		{315, TEXT("/Game/Art/Tiles/Dirt/Set2/8_Dirt_Set2_MB.8_Dirt_Set2_MB")},
 		{281, TEXT("/Game/Art/Tiles/Dirt/Set2/9_Dirt_Set2_RB.9_Dirt_Set2_RB")},
 		{326, TEXT("/Game/Art/Tiles/Dirt/Set3/1_Dirt_Set3_LT.1_Dirt_Set3_LT")},
-		{463, TEXT("/Game/Art/Tiles/Dirt/Set3/2_Dirt_Set3_MT.2_Dirt_Set3_MT")},
+		{462, TEXT("/Game/Art/Tiles/Dirt/Set3/2_Dirt_Set3_MT.2_Dirt_Set3_MT")},
 		{396, TEXT("/Game/Art/Tiles/Dirt/Set3/3_Dirt_Set3_RT.3_Dirt_Set3_RT")},
-		{367, TEXT("/Game/Art/Tiles/Dirt/Set3/4_Dirt_Set3_LM.4_Dirt_Set3_LM")},
+		{359, TEXT("/Game/Art/Tiles/Dirt/Set3/4_Dirt_Set3_LM.4_Dirt_Set3_LM")},
 		{511, TEXT("/Game/Art/Tiles/Dirt/Set3/5_Dirt_Set3_MM.5_Dirt_Set3_MM")},
-		{415, TEXT("/Game/Art/Tiles/Dirt/Set3/6_Dirt_Set3_RM.6_Dirt_Set3_RM")},
+		{413, TEXT("/Game/Art/Tiles/Dirt/Set3/6_Dirt_Set3_RM.6_Dirt_Set3_RM")},
 		{291, TEXT("/Game/Art/Tiles/Dirt/Set3/7_Dirt_Set3_LB.7_Dirt_Set3_LB")},
-		{319, TEXT("/Game/Art/Tiles/Dirt/Set3/8_Dirt_Set3_MB.8_Dirt_Set3_MB")},
+		{315, TEXT("/Game/Art/Tiles/Dirt/Set3/8_Dirt_Set3_MB.8_Dirt_Set3_MB")},
 		{281, TEXT("/Game/Art/Tiles/Dirt/Set3/9_Dirt_Set3_RB.9_Dirt_Set3_RB")},
 		{6, TEXT("/Game/Art/Tiles/Dirt/Set4/1_Dirt_Set4_LT.1_Dirt_Set4_LT")},
 		{266, TEXT("/Game/Art/Tiles/Dirt/Set4/2_Dirt_Set4_MT.2_Dirt_Set4_MT")},
@@ -99,6 +99,40 @@ namespace
 		// Unsupported grass-side combinations safely fall back to the plain grass tile (mask zero).
 		return Exact(0);
 	}
+
+	uint8 GetPreferredDefaultVariant(const uint16 Mask)
+	{
+		// Some supplied pieces share the same nine sampled terrain points but have
+		// incompatible curves between those points. Pick one stable representative
+		// instead of mixing different Sets along a continuous edge.
+		switch (Mask)
+		{
+		// Set3 straight pieces have open notches; Set2 has continuous grass
+		// bands that meet both the rounded outer corners and Set1 inner corners.
+		case 315: return 17; // Set2 MB
+		case 359: return 13; // Set2 LM
+		case 413: return 15; // Set2 RM
+		case 462: return 11; // Set2 MT
+		case 326: return 19; // Set3 LT
+		case 396: return 21; // Set3 RT
+		case 291: return 25; // Set3 LB
+		case 281: return 27; // Set3 RB
+		case 266: return 47; // Set6 horizontal straight
+		case 261: return 50; // Set6 vertical straight
+		default: return PSDirtAutoTile::NoVariant;
+		}
+	}
+
+	uint16 NormalizeDirtMask(const uint16 Mask)
+	{
+		using namespace PSDirtAutoTile;
+		uint16 Result = Mask & (Center | CardinalMask);
+		if ((Mask & (North | West)) == (North | West)) Result |= Mask & NorthWest;
+		if ((Mask & (North | East)) == (North | East)) Result |= Mask & NorthEast;
+		if ((Mask & (South | East)) == (South | East)) Result |= Mask & SouthEast;
+		if ((Mask & (South | West)) == (South | West)) Result |= Mask & SouthWest;
+		return Result;
+	}
 }
 
 uint8 UPSDirtAutoTileSet::SelectVariant(const uint16 Mask, const uint32 Seed) const
@@ -123,12 +157,22 @@ UTexture2D* UPSDirtAutoTileSet::GetVariantTexture(const uint8 Variant) const
 
 uint8 PSDirtAutoTile::SelectDefaultVariant(const uint16 Mask, const uint32 Seed)
 {
-	return SelectWithFallback(Mask, [Seed](const uint16 Candidate)
+	// Grass occupies its whole cell. Transition geometry belongs to adjacent dirt cells.
+	if ((Mask & Center) == 0) return 32;
+	const uint16 Normalized = NormalizeDirtMask(Mask);
+	const auto Exact = [Seed](const uint16 Candidate)
 	{
+		if (const uint8 Preferred = GetPreferredDefaultVariant(Candidate)) return Preferred;
 		return SelectMatchingVariant(UE_ARRAY_COUNT(DefaultRules), Candidate, Seed,
 			[](const int32 Index) { return DefaultRules[Index].Mask; },
 			[](const int32) { return 1; });
-	});
+	};
+	if (const uint8 Variant = Exact(Normalized)) return Variant;
+	// Missing multi-corner artwork must not invent disconnected grass holes. Fill
+	// only eligible diagonals, preserving every cardinal edge of the original cell.
+	const uint16 Filled = NormalizeDirtMask(Normalized | NorthWest | NorthEast | SouthEast | SouthWest);
+	if (const uint8 Variant = Exact(Filled)) return Variant;
+	return Exact(Center | (Normalized & CardinalMask));
 }
 
 uint16 PSDirtAutoTile::GetDefaultVariantMask(const uint8 Variant)
