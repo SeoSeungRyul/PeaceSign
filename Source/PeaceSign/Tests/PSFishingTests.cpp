@@ -296,6 +296,7 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Grid->LoadWorld();
 	TestTrue(TEXT("Lake survives save and reload"), Grid->CanFishFrom(Shore, Water));
 	// Simulate a pre-water saved chunk: no new partial lake may grow beside it.
+	Grid->MiningGenerationVersion = 0;
 	for (FPSTileCell& Cell : Grid->ModifiedChunks.FindChecked(ChunkCoord).Cells) Cell.GroundType = EPSTileType::Grass;
 	for (int32 DY = -4; DY <= 4; ++DY)
 		for (int32 DX = -4; DX <= 4; ++DX)

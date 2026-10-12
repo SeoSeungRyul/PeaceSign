@@ -10,6 +10,7 @@
 #include "UObject/ConstructorHelpers.h"
 #include "PSTileTypes.h"
 #include "PSDirtAutoTileSet.h"
+#include "PSWaterAutoTile.h"
 #include "PSCropGrowth.h"
 
 APSTileChunkActor::APSTileChunkActor()
@@ -89,6 +90,18 @@ APSTileChunkActor::APSTileChunkActor()
 	}
 
 	ConfigureInstances(GrassInstances);
+	WaterVariantTextures.SetNum(PSWaterAutoTile::VariantCount + 1);
+	DefaultDirtVariantTextures.SetNum(PSDirtAutoTile::VariantCount + 1);
+	for (uint8 Variant = 1; Variant <= PSWaterAutoTile::VariantCount; ++Variant)
+	{
+		ConstructorHelpers::FObjectFinder<UTexture2D> Texture(PSWaterAutoTile::GetVariantTexturePath(Variant));
+		if (Texture.Succeeded()) WaterVariantTextures[Variant] = Texture.Object;
+	}
+	for (uint8 Variant = 1; Variant <= PSDirtAutoTile::VariantCount; ++Variant)
+	{
+		ConstructorHelpers::FObjectFinder<UTexture2D> DirtPiece(PSDirtAutoTile::GetDefaultVariantTexturePath(Variant));
+		if (DirtPiece.Succeeded()) DefaultDirtVariantTextures[Variant] = DirtPiece.Object;
+	}
 	ConfigureInstances(DirtInstances);
 	ConfigureInstances(StoneInstances);
 	ConfigureInstances(CopperOreInstances);
@@ -136,7 +149,9 @@ void APSTileChunkActor::Rebuild(
 	WaterInstances->ClearInstances();
 	TilledSoilInstances->ClearInstances();
 	SeedInstances->ClearInstances();
-	for (const TPair<uint8, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Pair : DirtVariantInstances)
+	for (const TPair<uint16, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Pair : DirtVariantInstances)
+		if (Pair.Value) Pair.Value->ClearInstances();
+	for (const TPair<uint8, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Pair : WaterVariantInstances)
 		if (Pair.Value) Pair.Value->ClearInstances();
 
 	if (!TileMesh || ChunkData.Cells.Num() != ChunkSize * ChunkSize)
@@ -158,7 +173,8 @@ void APSTileChunkActor::Rebuild(
 	TArray<FTransform> WaterTransforms;
 	TArray<FTransform> TilledSoilTransforms;
 	TArray<FTransform> SeedTransforms;
-	TMap<uint8, TArray<FTransform>> DirtVariantTransforms;
+	TMap<uint16, TArray<FTransform>> DirtVariantTransforms;
+	TMap<uint8, TArray<FTransform>> WaterVariantTransforms;
 	GrassTransforms.Reserve(ChunkData.Cells.Num());
 	DirtTransforms.Reserve(ChunkData.Cells.Num());
 	StoneTransforms.Reserve(ChunkData.Cells.Num());
@@ -179,7 +195,11 @@ void APSTileChunkActor::Rebuild(
 			const FPSTileCell& Cell = ChunkData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
 			TArray<FTransform>* GroundTargetTransforms = nullptr;
 			const bool bUsesDirtVariant = Cell.Variant != PSDirtAutoTile::NoVariant
-				&& (Cell.GroundType == EPSTileType::Grass || Cell.GroundType == EPSTileType::Dirt);
+				&& (Cell.GroundType == EPSTileType::Grass || Cell.GroundType == EPSTileType::Dirt)
+				&& !(Cell.bFixedVariant && Cell.bWaterArtwork);
+			const bool bUsesWaterVariant = (Cell.bFixedVariant ? Cell.bWaterArtwork : Cell.GroundType == EPSTileType::Water)
+				&& WaterVariantTextures.IsValidIndex(Cell.Variant) && Cell.Variant > 0
+				&& WaterVariantTextures[Cell.Variant] && DirtTextureMaterial;
 			switch (Cell.GroundType)
 			{
 			case EPSTileType::Grass:
@@ -196,7 +216,7 @@ void APSTileChunkActor::Rebuild(
 				GroundTargetTransforms = &DirtTransforms;
 				break;
 			case EPSTileType::Water:
-				GroundTargetTransforms = &WaterTransforms;
+				if (!bUsesWaterVariant) GroundTargetTransforms = &WaterTransforms;
 				break;
 			default:
 				break;
@@ -206,9 +226,18 @@ void APSTileChunkActor::Rebuild(
 				(static_cast<float>(LocalX) + 0.5f) * CellSize,
 				(static_cast<float>(LocalY) + 0.5f) * CellSize,
 				RenderZOffset);
-			if (bUsesDirtVariant)
+			if (bUsesWaterVariant)
 			{
-				DirtVariantTransforms.FindOrAdd(Cell.Variant).Emplace(
+				const uint8 TextureVariant = Cell.bFixedVariant
+					? PSWaterAutoTile::GetFixedTextureVariant(Cell.Variant) : Cell.Variant;
+				WaterVariantTransforms.FindOrAdd(TextureVariant).Emplace(
+					FRotator(0, PSWaterAutoTile::ArtworkYaw, 0), GroundLocation, FVector(TileScale));
+			}
+			else if (bUsesDirtVariant)
+			{
+				// Separate keys prevent designer overrides from changing fixed source artwork.
+				const uint16 RenderVariant = Cell.bFixedVariant ? Cell.Variant + 256 : Cell.Variant;
+				DirtVariantTransforms.FindOrAdd(RenderVariant).Emplace(
 					FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
 			}
 			else if (GroundTargetTransforms)
@@ -265,15 +294,41 @@ void APSTileChunkActor::Rebuild(
 	WaterInstances->AddInstances(WaterTransforms, false, false, false);
 	TilledSoilInstances->AddInstances(TilledSoilTransforms, false, false, false);
 	SeedInstances->AddInstances(SeedTransforms, false, false, false);
-	for (const TPair<uint8, TArray<FTransform>>& Pair : DirtVariantTransforms)
+	for (const TPair<uint16, TArray<FTransform>>& Pair : DirtVariantTransforms)
 	{
 		UHierarchicalInstancedStaticMeshComponent* Instances = GetOrCreateDirtVariantComponent(Pair.Key);
 		ApplyDirtVariantMaterial(Pair.Key, DirtTileSet);
 		if (Instances) Instances->AddInstances(Pair.Value, false, false, false);
 	}
+	for (const TPair<uint8, TArray<FTransform>>& Pair : WaterVariantTransforms)
+	{
+		if (UHierarchicalInstancedStaticMeshComponent* Instances = GetOrCreateWaterVariantComponent(Pair.Key))
+			Instances->AddInstances(Pair.Value, false, false, false);
+	}
 }
 
-UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateDirtVariantComponent(const uint8 Variant)
+UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateWaterVariantComponent(const uint8 Variant)
+{
+	if (UHierarchicalInstancedStaticMeshComponent* Existing = WaterVariantInstances.FindRef(Variant))
+		return Existing;
+	if (!WaterVariantTextures.IsValidIndex(Variant) || !WaterVariantTextures[Variant] || !DirtTextureMaterial)
+		return nullptr;
+	const FName Name(*FString::Printf(TEXT("WaterVariant_%u"), Variant));
+	UHierarchicalInstancedStaticMeshComponent* Instances =
+		NewObject<UHierarchicalInstancedStaticMeshComponent>(this, Name, RF_Transient);
+	Instances->SetupAttachment(SceneRoot);
+	ConfigureInstances(Instances);
+	UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(DirtTextureMaterial, this);
+	Material->SetVectorParameterValue(TEXT("Color"), FLinearColor::White);
+	Material->SetTextureParameterValue(TEXT("SpriteTexture"), WaterVariantTextures[Variant]);
+	Instances->SetMaterial(0, Material);
+	WaterVariantMaterials.Add(Variant, Material);
+	Instances->RegisterComponent();
+	WaterVariantInstances.Add(Variant, Instances);
+	return Instances;
+}
+
+UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateDirtVariantComponent(const uint16 Variant)
 {
 	if (UHierarchicalInstancedStaticMeshComponent* Existing = DirtVariantInstances.FindRef(Variant))
 		return Existing;
@@ -290,16 +345,19 @@ UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateDirtVar
 }
 
 void APSTileChunkActor::ApplyDirtVariantMaterial(
-	const uint8 Variant,
+	const uint16 Variant,
 	const UPSDirtAutoTileSet* DirtTileSet)
 {
 	UHierarchicalInstancedStaticMeshComponent* Instances = DirtVariantInstances.FindRef(Variant);
 	if (!Instances) return;
 
-	UTexture2D* Texture = DirtTileSet ? DirtTileSet->GetVariantTexture(Variant) : nullptr;
-	if (!Texture && (!DirtTileSet || DirtTileSet->Rules.IsEmpty()))
+	const bool bFixed = Variant > 256;
+	const uint8 SourceVariant = bFixed ? Variant - 256 : Variant;
+	UTexture2D* Texture = bFixed && DefaultDirtVariantTextures.IsValidIndex(SourceVariant)
+		? DefaultDirtVariantTextures[SourceVariant].Get() : (DirtTileSet ? DirtTileSet->GetVariantTexture(Variant) : nullptr);
+	if (!Texture && (bFixed || !DirtTileSet || DirtTileSet->Rules.IsEmpty()))
 	{
-		if (const TCHAR* TexturePath = PSDirtAutoTile::GetDefaultVariantTexturePath(Variant))
+		if (const TCHAR* TexturePath = PSDirtAutoTile::GetDefaultVariantTexturePath(SourceVariant))
 			Texture = LoadObject<UTexture2D>(nullptr, TexturePath);
 	}
 	if (!Texture) Texture = DirtTexture;

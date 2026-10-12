@@ -96,18 +96,33 @@ protected:
 	float RenderZOffset = 1.0f;
 
 private:
-	UPROPERTY(Transient)
-	TMap<uint8, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> DirtVariantInstances;
+	UPROPERTY()
+	TArray<TObjectPtr<UTexture2D>> DefaultDirtVariantTextures;
+
+	// Hard references populated in the constructor keep water assets in cooked builds.
+	UPROPERTY()
+	TArray<TObjectPtr<UTexture2D>> WaterVariantTextures;
 
 	UPROPERTY(Transient)
-	TMap<uint8, TObjectPtr<UMaterialInstanceDynamic>> DirtVariantMaterials;
+	TMap<uint8, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> WaterVariantInstances;
+
+	UPROPERTY(Transient)
+	TMap<uint8, TObjectPtr<UMaterialInstanceDynamic>> WaterVariantMaterials;
+
+	UHierarchicalInstancedStaticMeshComponent* GetOrCreateWaterVariantComponent(uint8 Variant);
+
+	UPROPERTY(Transient)
+	TMap<uint16, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> DirtVariantInstances;
+
+	UPROPERTY(Transient)
+	TMap<uint16, TObjectPtr<UMaterialInstanceDynamic>> DirtVariantMaterials;
 
 	// Separate collision volumes keep flat water and mineable object visuals unchanged.
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UBoxComponent>> BlockingTileColliders;
 	void RebuildBlockingCollision(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize);
-	UHierarchicalInstancedStaticMeshComponent* GetOrCreateDirtVariantComponent(uint8 Variant);
-	void ApplyDirtVariantMaterial(uint8 Variant, const UPSDirtAutoTileSet* DirtTileSet);
+	UHierarchicalInstancedStaticMeshComponent* GetOrCreateDirtVariantComponent(uint16 Variant);
+	void ApplyDirtVariantMaterial(uint16 Variant, const UPSDirtAutoTileSet* DirtTileSet);
 	void ConfigureInstances(UHierarchicalInstancedStaticMeshComponent* Instances) const;
 	void ApplyMaterials();
 };

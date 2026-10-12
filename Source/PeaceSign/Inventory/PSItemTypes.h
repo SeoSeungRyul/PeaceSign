@@ -17,7 +17,8 @@ enum class EPSItemType : uint8
 	FishingBait,
 	FishingBobber,
 	Pickaxe,
-	Ore
+	Ore,
+	Shovel
 };
 
 USTRUCT(BlueprintType)

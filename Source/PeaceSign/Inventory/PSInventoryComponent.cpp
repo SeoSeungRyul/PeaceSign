@@ -4,7 +4,7 @@
 
 namespace
 {
-	constexpr int32 CurrentInventorySaveVersion = 4;
+	constexpr int32 CurrentInventorySaveVersion = 5;
 
 	bool UsesCropId(const EPSItemType ItemType)
 	{
@@ -362,6 +362,9 @@ void UPSInventoryComponent::InitializeDefaults()
 	HotbarSlots[3].ItemId = PSItemIds::StonePickaxe;
 	HotbarSlots[3].Quantity = 1;
 	HotbarSlots[3].CurrentDurability = PSItems::GetDefinition(HotbarSlots[3]).MaxDurability;
+	HotbarSlots[4].ItemType = EPSItemType::Shovel;
+	HotbarSlots[4].Quantity = 1;
+	HotbarSlots[4].CurrentDurability = PSItems::GetDefinition(HotbarSlots[4]).MaxDurability;
 }
 
 void UPSInventoryComponent::NotifyChanged()
@@ -413,7 +416,7 @@ bool UPSInventoryComponent::LoadInventory()
 	{
 		return false;
 	}
-	const bool bLegacyDurability = Save->DataVersion < CurrentInventorySaveVersion;
+	const bool bLegacyDurability = Save->DataVersion < 4;
 	SanitizeSlots(HotbarSlots, bLegacyDurability);
 	SanitizeSlots(BagSlots, bLegacyDurability);
 	if (Save->DataVersion < 1 && CountItem(EPSItemType::FishingRod) == 0 && HotbarSlots[2].IsEmpty())
@@ -455,6 +458,39 @@ bool UPSInventoryComponent::LoadInventory()
 			if (!bMigrated)
 				UE_LOG(LogTemp, Warning, TEXT("Starter pickaxe could not be added because every inventory slot is full."));
 		}
+	}
+	if (Save->DataVersion < 5 && CountItem(EPSItemType::Shovel) == 0)
+	{
+		FPSItemStack Shovel;
+		Shovel.ItemType = EPSItemType::Shovel;
+		Shovel.Quantity = 1;
+		Shovel.CurrentDurability = PSItems::GetDefinition(Shovel).MaxDurability;
+		bool bAddedShovel = false;
+		if (HotbarSlots[4].IsEmpty())
+		{
+			HotbarSlots[4] = Shovel;
+			bAddedShovel = true;
+		}
+		else
+		{
+			for (FPSItemStack& Slot : HotbarSlots)
+			{
+				if (!Slot.IsEmpty()) continue;
+				Slot = Shovel;
+				bAddedShovel = true;
+				break;
+			}
+			for (int32 Index = 0; !bAddedShovel && BagSlots.IsValidIndex(Index); ++Index)
+			{
+				if (!BagSlots[Index].IsEmpty()) continue;
+				BagSlots[Index] = Shovel;
+				UnlockedBagSlotCount = FMath::Max(UnlockedBagSlotCount, Index + 1);
+				bAddedShovel = true;
+			}
+		}
+		bMigrated |= bAddedShovel;
+		if (!bAddedShovel)
+			UE_LOG(LogTemp, Warning, TEXT("Starter shovel could not be added because every inventory slot is full."));
 	}
 	if (bLegacyDurability) bMigrated = true;
 	if (bMigrated && bAutoSave) SaveInventory();
