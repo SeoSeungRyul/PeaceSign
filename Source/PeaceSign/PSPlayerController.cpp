@@ -80,6 +80,8 @@ namespace
 		{
 		case EPSTileInteractionResult::Tilled:
 			return TEXT("Soil tilled");
+		case EPSTileInteractionResult::GroundChanged:
+			return TEXT("풀 / 흙 타일 전환 완료");
 		case EPSTileInteractionResult::StoneDamaged:
 			return TEXT("Stone damaged");
 		case EPSTileInteractionResult::Mined:
@@ -367,7 +369,8 @@ void APSPlayerController::HandleSpecialAttack()
 	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (TargetCell.IsSet())
 	{
-		if (GridWorld && GetPawn() && GridWorld->GetWorldObjectType(TargetCell.GetValue()) == EPSWorldObjectType::Stone
+		const EPSEquipment UsedEquipment = Equipment;
+		if (UsedEquipment != EPSEquipment::Shovel && GridWorld && GetPawn() && GridWorld->GetWorldObjectType(TargetCell.GetValue()) == EPSWorldObjectType::Stone
 			&& !GridWorld->CanMineFrom(GridWorld->WorldToCell(GetPawn()->GetActorLocation()), TargetCell.GetValue()))
 		{
 			if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, FColor::Red,
@@ -375,7 +378,7 @@ void APSPlayerController::HandleSpecialAttack()
 			return;
 		}
 		const EPSTileInteractionResult Result = UseEquippedItemOnCell(TargetCell.GetValue());
-		if (Equipment == EPSEquipment::BareHands)
+		if (UsedEquipment == EPSEquipment::BareHands)
 		{
 			if (Result == EPSTileInteractionResult::CropRemoved)
 			{
@@ -385,7 +388,7 @@ void APSPlayerController::HandleSpecialAttack()
 			OnSpecialAttackRequested();
 			return;
 		}
-		if (Equipment != EPSEquipment::UnusableItem && GEngine)
+		if (UsedEquipment != EPSEquipment::UnusableItem && GEngine)
 		{
 			GEngine->AddOnScreenDebugMessage(
 				INDEX_NONE,
@@ -403,6 +406,22 @@ void APSPlayerController::HandleSpecialAttack()
 EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPoint Cell)
 {
 	if (!GridWorld) return EPSTileInteractionResult::InvalidCell;
+	// Handle the shovel before the shared stone-mining path: it only changes ground.
+	if (Equipment == EPSEquipment::Shovel)
+	{
+		const FPSItemStack* Shovel = InventoryComponent
+			? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
+		if (!Shovel || Shovel->IsEmpty() || Shovel->ItemType != EPSItemType::Shovel
+			|| Shovel->CurrentDurability <= 0)
+			return EPSTileInteractionResult::NoEffect;
+		const EPSTileInteractionResult Result = GridWorld->ShovelCell(Cell);
+		if (Result == EPSTileInteractionResult::GroundChanged)
+		{
+			bool bDestroyed = false;
+			InventoryComponent->ConsumeHotbarDurability(SelectedHotbarSlot, 1, bDestroyed);
+		}
+		return Result;
+	}
 	if (GridWorld->GetWorldObjectType(Cell) == EPSWorldObjectType::Stone)
 	{
 		const FPSItemStack* EquippedStack = InventoryComponent
@@ -524,6 +543,7 @@ void APSPlayerController::RefreshEquipmentFromHotbar()
 		case EPSItemType::TestSeed: NewEquipment = EPSEquipment::Seed; break;
 		case EPSItemType::FishingRod: NewEquipment = EPSEquipment::FishingRod; break;
 		case EPSItemType::Pickaxe: NewEquipment = EPSEquipment::Pickaxe; break;
+		case EPSItemType::Shovel: NewEquipment = EPSEquipment::Shovel; break;
 		default: NewEquipment = EPSEquipment::UnusableItem; break;
 		}
 	}

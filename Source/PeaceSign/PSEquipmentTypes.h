@@ -11,5 +11,6 @@ enum class EPSEquipment : uint8
 	Seed,
 	FishingRod,
 	Pickaxe,
-	UnusableItem
+	UnusableItem,
+	Shovel
 };

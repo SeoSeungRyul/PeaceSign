@@ -7,13 +7,19 @@
 #include "Kismet/GameplayStatics.h"
 #include "PSTileChunkActor.h"
 #include "PSDirtAutoTileSet.h"
+#include "PSWaterAutoTile.h"
+#include "PSTileStamp.h"
+#include "PSOreVeinGeneration.h"
+#if WITH_EDITOR
+#include "ScopedTransaction.h"
+#endif
 #include "PSWorldSaveGame.h"
 #include "PSCropGrowth.h"
 #include "../Time/PSGameTimeSubsystem.h"
 
 namespace
 {
-	constexpr int32 CurrentWorldSaveVersion = 3;
+	constexpr int32 CurrentWorldSaveVersion = 4;
 	constexpr int32 LegacyStoneHealthScale = 10;
 
 	uint32 HashCell(const FIntPoint Cell, const int32 Seed)
@@ -280,6 +286,7 @@ EPSTileInteractionResult APSGridWorld::MineCell(const FIntPoint Cell, const int3
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
+	SavedChunk.Veins = Chunk.Veins;
 	RebuildChunk(ChunkCoordinate);
 	SaveWorld();
 	return bDestroyed ? EPSTileInteractionResult::Mined : EPSTileInteractionResult::StoneDamaged;
@@ -323,6 +330,18 @@ bool APSGridWorld::CanFishFrom(const FIntPoint PlayerCell, const FIntPoint Water
 int32 APSGridWorld::GetFishingLocationId(const FIntPoint WaterCell) const
 {
 	return GetGroundTile(WaterCell) == EPSTileType::Water ? static_cast<int32>(FishingLocation) : INDEX_NONE;
+}
+
+EPSTileInteractionResult APSGridWorld::ShovelCell(const FIntPoint Cell)
+{
+	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
+	if (GetWorldObjectType(Cell) != EPSWorldObjectType::None || GetCropType(Cell) != EPSCropType::None)
+		return EPSTileInteractionResult::NoEffect;
+	const EPSTileType Ground = GetGroundTile(Cell);
+	if (Ground != EPSTileType::Grass && Ground != EPSTileType::Dirt)
+		return EPSTileInteractionResult::NoEffect;
+	return SetGroundTile(Cell, Ground == EPSTileType::Grass ? EPSTileType::Dirt : EPSTileType::Grass)
+		? EPSTileInteractionResult::GroundChanged : EPSTileInteractionResult::NoEffect;
 }
 
 EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
@@ -403,6 +422,8 @@ bool APSGridWorld::ResetWorld()
 	ModifiedChunks.Reset();
 	GrowingCrops.Reset();
 	WorldSeed = StartingWorldSeed;
+	GeneratedMiningChunks.Reset();
+	bMiningGenerationReady = false;
 
 	// Rebuild existing renderers in place. Destroying and respawning them in the same
 	// frame can leave the deferred old HISM visible after a development reset.
@@ -430,6 +451,8 @@ bool APSGridWorld::ResetWorld()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("Grid world reset to seed %d"), WorldSeed);
+	// Even an empty reset must retain its generator and geometry across the next launch.
+	SaveWorld();
 	return true;
 }
 
@@ -442,6 +465,8 @@ void APSGridWorld::GenerateEditorPreview()
 	}
 
 	ClearEditorPreview();
+	// Old map instances may still serialize 16; new-world runtime uses 32 as well.
+	if (MiningGenerationVersion > 0) ChunkSize = 32;
 
 	const int32 PreviewHalfExtent = FMath::Min(EditorPreviewHalfExtentInCells, WorldHalfExtentInCells);
 	const int32 PreviewSize = PreviewHalfExtent * 2;
@@ -460,6 +485,7 @@ void APSGridWorld::GenerateEditorPreview()
 				? GenerateMineralType(Cell) : EPSMineralType::None;
 			Tile.ObjectHealth = Tile.ObjectType == EPSWorldObjectType::Stone
 				? GetStoneMaxHealth(Tile.MineralType) : 0;
+			BuildStampedCell(Cell, Tile);
 		}
 	}
 	for (int32 LocalY = 0; LocalY < PreviewSize; ++LocalY)
@@ -468,6 +494,13 @@ void APSGridWorld::GenerateEditorPreview()
 		{
 			const FIntPoint Cell(LocalX - PreviewHalfExtent, LocalY - PreviewHalfExtent);
 			FPSTileCell& Tile = PreviewData.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), PreviewSize)];
+			if (Tile.bFixedVariant) continue;
+			if (Tile.GroundType == EPSTileType::Water)
+			{
+				Tile.Variant = PSWaterAutoTile::SelectVariant(
+					BuildTerrainNeighborMask(Cell, EPSTileType::Water), HashCell(Cell, WorldSeed + 104729));
+				continue;
+			}
 			if (Tile.GroundType != EPSTileType::Grass && Tile.GroundType != EPSTileType::Dirt) continue;
 			const uint16 Mask = BuildDirtNeighborMask(Cell);
 			const uint32 VisualSeed = HashCell(Cell, WorldSeed + 104729);
@@ -546,6 +579,7 @@ bool APSGridWorld::IsLakeCell(const FIntPoint Cell) const
 		|| (Min.X <= 2 && Max.X >= -2 && Min.Y <= 2 && Max.Y >= -2)) return false;
 	// Old saves contain whole chunks, including untouched land. Suppress a whole lake
 	// if it overlaps saved land so loading an old chunk cannot cut a lake into fragments.
+	if (MiningGenerationVersion > 0) return true;
 	for (int32 Y = Min.Y; Y <= Max.Y; ++Y)
 	{
 		for (int32 X = Min.X; X <= Max.X; ++X)
@@ -562,6 +596,58 @@ bool APSGridWorld::IsLakeCell(const FIntPoint Cell) const
 }
 
 bool APSGridWorld::IsDirtPatchCell(const FIntPoint Cell) const
+{
+	if (!IsRawDirtPatchCell(Cell)) return false;
+
+	// Keep only cells belonging to a solid 2x2 dirt block. The union of these
+	// blocks cannot contain one-cell-wide straight fingers or isolated tips.
+	// Sample the procedural field, not loaded chunks, so generation order and
+	// chunk boundaries cannot change the result. Saved terrain is not edited.
+	bool Dirt[3][3] = {};
+	for (int32 Y = 0; Y < 3; ++Y)
+		for (int32 X = 0; X < 3; ++X)
+		{
+			const FIntPoint Candidate = Cell + FIntPoint(X - 1, Y - 1);
+			Dirt[Y][X] = IsCellInsideWorld(Candidate)
+				&& IsRawDirtPatchCell(Candidate) && !IsLakeCell(Candidate);
+		}
+	for (int32 Y = 0; Y < 2; ++Y)
+		for (int32 X = 0; X < 2; ++X)
+			if (Dirt[Y][X] && Dirt[Y][X + 1] && Dirt[Y + 1][X] && Dirt[Y + 1][X + 1])
+				return true;
+	return false;
+}
+
+bool APSGridWorld::BuildStampedCell(const FIntPoint Cell, FPSTileCell& OutCell) const
+{
+	if (!IsCellInsideWorld(Cell)) return false;
+	for (int32 Index = TileStamps.Num() - 1; Index >= 0; --Index)
+		if (PSTileStamp::BuildCell(TileStamps[Index], Cell, OutCell)) return true;
+	return false;
+}
+
+void APSGridWorld::AddTileStamp()
+{
+#if WITH_EDITOR
+	if (!GetWorld() || GetWorld()->IsGameWorld()) return;
+	const FIntPoint Size = PSTileStamp::GetSize(SelectedTileStamp);
+	const int64 MaxX = static_cast<int64>(SelectedTileStamp.Origin.X) + Size.X - 1;
+	const int64 MaxY = static_cast<int64>(SelectedTileStamp.Origin.Y) + Size.Y - 1;
+	if (Size.X <= 0 || !IsCellInsideWorld(SelectedTileStamp.Origin)
+		|| MaxX >= WorldHalfExtentInCells || MaxY >= WorldHalfExtentInCells)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Tile stamp must fit entirely inside the grid world."));
+		return;
+	}
+	const FScopedTransaction Transaction(NSLOCTEXT("PeaceSign", "AddTileStamp", "Add Tile Stamp"));
+	Modify();
+	TileStamps.Add(SelectedTileStamp);
+	MarkPackageDirty();
+	GenerateEditorPreview();
+#endif
+}
+
+bool APSGridWorld::IsRawDirtPatchCell(const FIntPoint Cell) const
 {
 	// Dirt is generated as sparse ellipses instead of independent noisy cells. At the
 	// current settings it covers roughly ten percent of non-water terrain.
@@ -604,12 +690,22 @@ EPSTileType APSGridWorld::GenerateGroundTile(const FIntPoint Cell) const
 		return EPSTileType::Empty;
 	}
 
+	FPSTileCell Stamped;
+	if (BuildStampedCell(Cell, Stamped)) return Stamped.GroundType;
 	if (IsLakeCell(Cell)) return EPSTileType::Water;
 	return IsDirtPatchCell(Cell) ? EPSTileType::Dirt : EPSTileType::Grass;
 }
 
 EPSWorldObjectType APSGridWorld::GenerateWorldObjectType(const FIntPoint Cell) const
 {
+	if (MiningGenerationVersion > 0)
+	{
+		if (!IsCellInsideWorld(Cell)) return EPSWorldObjectType::None;
+		const FPSChunkData& Chunk = GetGeneratedMiningChunk(PSGrid::CellToChunk(Cell, ChunkSize));
+		return Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize)].ObjectType;
+	}
+	FPSTileCell Stamped;
+	if (BuildStampedCell(Cell, Stamped)) return EPSWorldObjectType::None;
 	const EPSTileType Ground = GenerateGroundTile(Cell);
 	if (Ground == EPSTileType::Empty || Ground == EPSTileType::Water)
 		return EPSWorldObjectType::None;
@@ -619,6 +715,12 @@ EPSWorldObjectType APSGridWorld::GenerateWorldObjectType(const FIntPoint Cell) c
 
 EPSMineralType APSGridWorld::GenerateMineralType(const FIntPoint Cell) const
 {
+	if (MiningGenerationVersion > 0)
+	{
+		if (!IsCellInsideWorld(Cell)) return EPSMineralType::None;
+		const FPSChunkData& Chunk = GetGeneratedMiningChunk(PSGrid::CellToChunk(Cell, ChunkSize));
+		return Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize)].MineralType;
+	}
 	if (GenerateWorldObjectType(Cell) != EPSWorldObjectType::Stone) return EPSMineralType::None;
 	const int32 Distance = FMath::Max(FMath::Abs(Cell.X), FMath::Abs(Cell.Y));
 	const int32 DistanceBand = FMath::Clamp(
@@ -644,6 +746,7 @@ EPSMineralType APSGridWorld::GenerateMineralType(const FIntPoint Cell) const
 
 FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 {
+	if (MiningGenerationVersion > 0) return GetGeneratedMiningChunk(ChunkCoordinate);
 	FPSChunkData Chunk;
 	Chunk.Coordinate = ChunkCoordinate;
 	Chunk.Cells.SetNum(ChunkSize * ChunkSize);
@@ -662,17 +765,110 @@ FPSChunkData APSGridWorld::GenerateChunk(const FIntPoint ChunkCoordinate) const
 				? GenerateMineralType(Cell) : EPSMineralType::None;
 			Tile.ObjectHealth = Tile.ObjectType == EPSWorldObjectType::Stone
 				? GetStoneMaxHealth(Tile.MineralType) : 0;
+			BuildStampedCell(Cell, Tile);
 		}
 	}
 
 	return Chunk;
 }
 
+bool APSGridWorld::IsMiningEligible(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell) || PSOreGeneration::IsReserved(Cell, OreGenerationSettings) || IsLakeCell(Cell)) return false;
+	FPSTileCell Stamped;
+	return !BuildStampedCell(Cell, Stamped);
+}
+
+uint32 APSGridWorld::MiningInputsHash() const
+{
+	uint32 Hash = HashCombineFast(GetTypeHash(WorldSeed), GetTypeHash(ChunkSize));
+	Hash = HashCombineFast(Hash, GetTypeHash(WorldHalfExtentInCells));
+	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.BaseCell));
+	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.SafeRadius));
+	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.bReserveBaseRoutes));
+	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.RockPatchChance));
+	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.RockPatchSize));
+	for (const FPSMiningExclusionArea& Area : OreGenerationSettings.Exclusions)
+	{
+		Hash = HashCombineFast(Hash, GetTypeHash(Area.Min));
+		Hash = HashCombineFast(Hash, GetTypeHash(Area.Max));
+	}
+	for (const FPSTileStamp& Stamp : TileStamps)
+	{
+		Hash = HashCombineFast(Hash, GetTypeHash(Stamp.Origin));
+		Hash = HashCombineFast(Hash, GetTypeHash(Stamp.Set));
+		Hash = HashCombineFast(Hash, GetTypeHash(Stamp.bWater));
+		Hash = HashCombineFast(Hash, GetTypeHash(Stamp.bVertical));
+	}
+	return Hash;
+}
+
+void APSGridWorld::EnsureMiningGeneration() const
+{
+	const uint32 Inputs = MiningInputsHash();
+	if (bMiningGenerationReady && Inputs == CachedMiningInputsHash) return;
+	GeneratedMiningChunks.Reset();
+	CachedMiningInputsHash = Inputs;
+	MinimumMiningDistance = TNumericLimits<double>::Max();
+	MaximumMiningDistance = 0.0;
+	const FIntPoint First = PSGrid::CellToChunk(FIntPoint(-WorldHalfExtentInCells, -WorldHalfExtentInCells), PSOreGeneration::RockRegionSize);
+	const FIntPoint Last = PSGrid::CellToChunk(FIntPoint(WorldHalfExtentInCells - 1, WorldHalfExtentInCells - 1), PSOreGeneration::RockRegionSize);
+	for (int32 Y = First.Y; Y <= Last.Y; ++Y)
+		for (int32 X = First.X; X <= Last.X; ++X)
+			for (const FIntPoint Cell : PSOreGeneration::BuildRockPatch(FIntPoint(X, Y), WorldSeed, OreGenerationSettings,
+				[this](const FIntPoint Candidate) { return IsMiningEligible(Candidate); }))
+			{
+				const double Distance = (FVector2D(Cell) - FVector2D(OreGenerationSettings.BaseCell)).Size();
+				MinimumMiningDistance = FMath::Min(MinimumMiningDistance, Distance);
+				MaximumMiningDistance = FMath::Max(MaximumMiningDistance, Distance);
+			}
+	if (MinimumMiningDistance == TNumericLimits<double>::Max()) MinimumMiningDistance = 0.0;
+	bMiningGenerationReady = true;
+}
+
+const FPSChunkData& APSGridWorld::GetGeneratedMiningChunk(const FIntPoint ChunkCoordinate) const
+{
+	EnsureMiningGeneration();
+	if (const FPSChunkData* Existing = GeneratedMiningChunks.Find(ChunkCoordinate)) return *Existing;
+	FPSChunkData Chunk;
+	Chunk.Coordinate = ChunkCoordinate;
+	Chunk.Cells.SetNum(ChunkSize * ChunkSize);
+	const FIntPoint Origin = ChunkCoordinate * ChunkSize;
+	for (int32 Y = 0; Y < ChunkSize; ++Y)
+		for (int32 X = 0; X < ChunkSize; ++X)
+		{
+			FPSTileCell& Tile = Chunk.Cells[Y * ChunkSize + X];
+			Tile.GroundType = GenerateGroundTile(Origin + FIntPoint(X, Y));
+			BuildStampedCell(Origin + FIntPoint(X, Y), Tile);
+		}
+	const FIntPoint First = PSGrid::CellToChunk(Origin, PSOreGeneration::RockRegionSize);
+	const FIntPoint Last = PSGrid::CellToChunk(Origin + FIntPoint(ChunkSize - 1, ChunkSize - 1), PSOreGeneration::RockRegionSize);
+	for (int32 Y = First.Y; Y <= Last.Y; ++Y)
+		for (int32 X = First.X; X <= Last.X; ++X)
+			for (const FIntPoint Cell : PSOreGeneration::BuildRockPatch(FIntPoint(X, Y), WorldSeed, OreGenerationSettings,
+				[this](const FIntPoint Candidate) { return IsMiningEligible(Candidate); }))
+			{
+				const FIntPoint Local = Cell - Origin;
+				if (Local.X >= 0 && Local.Y >= 0 && Local.X < ChunkSize && Local.Y < ChunkSize)
+					Chunk.Cells[PSGrid::LocalToIndex(Local, ChunkSize)].ObjectType = EPSWorldObjectType::Stone;
+			}
+	PSOreGeneration::GenerateVeins(Chunk, ChunkSize, WorldSeed, OreGenerationSettings.BaseCell,
+		MinimumMiningDistance, MaximumMiningDistance);
+	for (FPSTileCell& Tile : Chunk.Cells)
+		if (Tile.ObjectType == EPSWorldObjectType::Stone) Tile.ObjectHealth = GetStoneMaxHealth(Tile.MineralType);
+	return GeneratedMiningChunks.Add(ChunkCoordinate, MoveTemp(Chunk));
+}
+
 uint16 APSGridWorld::BuildDirtNeighborMask(const FIntPoint Cell) const
 {
-	const auto IsDirt = [this](const FIntPoint Candidate)
+	return BuildTerrainNeighborMask(Cell, EPSTileType::Dirt);
+}
+
+uint16 APSGridWorld::BuildTerrainNeighborMask(const FIntPoint Cell, const EPSTileType Terrain) const
+{
+	const auto IsDirt = [this, Terrain](const FIntPoint Candidate)
 	{
-		return GetGroundTile(Candidate) == EPSTileType::Dirt;
+		return GetGroundTile(Candidate) == Terrain;
 	};
 
 	uint16 Mask = IsDirt(Cell) ? PSDirtAutoTile::Center : 0;
@@ -699,11 +895,20 @@ FPSChunkData APSGridWorld::BuildRenderChunkData(
 		for (int32 LocalX = 0; LocalX < ChunkSize; ++LocalX)
 		{
 			FPSTileCell& Tile = Result.Cells[PSGrid::LocalToIndex(FIntPoint(LocalX, LocalY), ChunkSize)];
+			if (Tile.bFixedVariant && Tile.Variant >= 1
+				&& Tile.Variant <= (Tile.bWaterArtwork ? PSWaterAutoTile::VariantCount : PSDirtAutoTile::VariantCount))
+				continue;
 			Tile.Variant = PSDirtAutoTile::NoVariant;
-			if (Tile.GroundType != EPSTileType::Grass && Tile.GroundType != EPSTileType::Dirt) continue;
 			const FIntPoint Cell(
 				ChunkCoordinate.X * ChunkSize + LocalX,
 				ChunkCoordinate.Y * ChunkSize + LocalY);
+			if (Tile.GroundType == EPSTileType::Water)
+			{
+				Tile.Variant = PSWaterAutoTile::SelectVariant(
+					BuildTerrainNeighborMask(Cell, EPSTileType::Water), HashCell(Cell, WorldSeed + 104729));
+				continue;
+			}
+			if (Tile.GroundType != EPSTileType::Grass && Tile.GroundType != EPSTileType::Dirt) continue;
 			const uint16 Mask = BuildDirtNeighborMask(Cell);
 			const uint32 VisualSeed = HashCell(Cell, WorldSeed + 104729);
 			Tile.Variant = DirtAutoTileSet
@@ -727,7 +932,15 @@ FPSChunkData& APSGridWorld::GetOrCreateChunk(const FIntPoint ChunkCoordinate)
 		if (SavedChunk->Cells.Num() == ChunkSize * ChunkSize)
 		{
 			Chunk.Cells = SavedChunk->Cells;
+			Chunk.Veins = SavedChunk->Veins;
 		}
+	}
+	else if (MiningGenerationVersion > 0)
+	{
+		FPSChunkSaveData& Visited = ModifiedChunks.Add(ChunkCoordinate);
+		Visited.Coordinate = ChunkCoordinate;
+		Visited.Cells = Chunk.Cells;
+		Visited.Veins = Chunk.Veins;
 	}
 
 	return LoadedChunks.Add(ChunkCoordinate, MoveTemp(Chunk));
@@ -766,7 +979,10 @@ void APSGridWorld::UpdateActiveChunks(const FIntPoint PlayerChunk)
 		}
 		ActiveChunkActors.Remove(ChunkCoordinate);
 		LoadedChunks.Remove(ChunkCoordinate);
+		GeneratedMiningChunks.Remove(ChunkCoordinate);
 	}
+	// Persist newly visited chunks once per streaming update, including unmined veins.
+	SaveWorld();
 }
 
 void APSGridWorld::SpawnChunkRenderer(const FIntPoint ChunkCoordinate)
@@ -825,6 +1041,8 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
 	Tile.GroundType = GroundType;
+	Tile.bFixedVariant = false;
+	Tile.bWaterArtwork = false;
 	if (GroundType == EPSTileType::Water)
 	{
 		Tile.ObjectType = EPSWorldObjectType::None;
@@ -835,6 +1053,7 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
+	SavedChunk.Veins = Chunk.Veins;
 
 	RebuildChunksAroundCell(Cell);
 	SaveWorld();
@@ -865,6 +1084,7 @@ bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType,
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
+	SavedChunk.Veins = Chunk.Veins;
 	RebuildChunk(ChunkCoordinate);
 	SaveWorld();
 	return true;
@@ -881,6 +1101,10 @@ void APSGridWorld::LoadWorld()
 	EnsureGrowthUpdates();
 	if (!UGameplayStatics::DoesSaveGameExist(SaveSlotName, 0))
 	{
+		MiningGenerationVersion = PSOreGeneration::CurrentVersion;
+		ChunkSize = 32;
+		bMiningGenerationReady = false;
+		GeneratedMiningChunks.Reset();
 		return;
 	}
 
@@ -891,6 +1115,29 @@ void APSGridWorld::LoadWorld()
 	}
 
 	WorldSeed = SaveGame->WorldSeed;
+	MiningGenerationVersion = SaveGame->DataVersion >= 4 ? SaveGame->MiningGenerationVersion : 0;
+	// Older saves omitted chunk dimensions. Infer the original square before indexing.
+	ChunkSize = SaveGame->DataVersion >= 4 ? FMath::Clamp(SaveGame->SavedChunkSize, 1, 64) : 16;
+	if (SaveGame->DataVersion < 4 && !SaveGame->ModifiedChunks.IsEmpty())
+	{
+		const int32 InferredSize = FMath::RoundToInt(FMath::Sqrt(static_cast<double>(SaveGame->ModifiedChunks[0].Cells.Num())));
+		if (InferredSize >= 1 && InferredSize <= 64 && InferredSize * InferredSize == SaveGame->ModifiedChunks[0].Cells.Num())
+			ChunkSize = InferredSize;
+	}
+	if (SaveGame->DataVersion >= 4)
+	{
+		WorldHalfExtentInCells = FMath::Max(1, SaveGame->SavedWorldHalfExtent);
+		CellSize = FMath::Max(1.0f, SaveGame->SavedCellSize);
+		OreGenerationSettings = SaveGame->OreSettings;
+		TileStamps = SaveGame->SavedTileStamps;
+		PlainStoneSpawnWeight = SaveGame->SavedPlainStoneWeight;
+		MineralSpawnRules = SaveGame->SavedMineralRules;
+		MinimumMiningDistance = SaveGame->MinimumMiningDistance;
+		MaximumMiningDistance = SaveGame->MaximumMiningDistance;
+	}
+	GeneratedMiningChunks.Reset();
+	bMiningGenerationReady = SaveGame->DataVersion >= 4;
+	CachedMiningInputsHash = MiningInputsHash();
 	if (SaveGame->SavedClockHalfHour >= 0 && GrowthClock)
 	{
 		GrowthClock->OnClockChanged.RemoveDynamic(this, &ThisClass::HandleClockChanged);
@@ -979,6 +1226,17 @@ void APSGridWorld::SaveWorld() const
 
 	SaveGame->WorldSeed = WorldSeed;
 	SaveGame->DataVersion = CurrentWorldSaveVersion;
+	if (MiningGenerationVersion > 0) EnsureMiningGeneration();
+	SaveGame->MiningGenerationVersion = MiningGenerationVersion;
+	SaveGame->SavedChunkSize = ChunkSize;
+	SaveGame->SavedWorldHalfExtent = WorldHalfExtentInCells;
+	SaveGame->SavedCellSize = CellSize;
+	SaveGame->OreSettings = OreGenerationSettings;
+	SaveGame->MinimumMiningDistance = MinimumMiningDistance;
+	SaveGame->MaximumMiningDistance = MaximumMiningDistance;
+	SaveGame->SavedTileStamps = TileStamps;
+	SaveGame->SavedPlainStoneWeight = PlainStoneSpawnWeight;
+	SaveGame->SavedMineralRules = MineralSpawnRules;
 	SaveGame->GrowthClockHalfHour = GetGrowthHalfHour();
 	if (const UPSGameTimeSubsystem* Clock = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr)
 	{

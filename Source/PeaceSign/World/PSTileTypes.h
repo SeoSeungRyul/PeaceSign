@@ -36,7 +36,8 @@ enum class EPSTileInteractionResult : uint8
 	Planted,
 	Harvested,
 	CropRemoved,
-	InventoryFull
+	InventoryFull,
+	GroundChanged
 };
 
 UENUM(BlueprintType)
@@ -76,6 +77,39 @@ struct FPSMineralSpawnRule
 	int32 Weight = 0;
 };
 
+/** Inclusive cell bounds reserved for buildings or required progression routes. */
+USTRUCT(BlueprintType)
+struct FPSMiningExclusionArea
+{
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame) FIntPoint Min = FIntPoint::ZeroValue;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame) FIntPoint Max = FIntPoint::ZeroValue;
+};
+
+USTRUCT(BlueprintType)
+struct FPSOreGenerationSettings
+{
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame) FIntPoint BaseCell = FIntPoint::ZeroValue;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "0")) int32 SafeRadius = 3;
+	/** Keep a three-cell-wide cross through the base open in the prototype world. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame) bool bReserveBaseRoutes = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame) TArray<FPSMiningExclusionArea> Exclusions;
+	/** Temporary rock density, independent of the mineral selection probabilities. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "0", ClampMax = "100")) int32 RockPatchChance = 65;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "4", ClampMax = "64")) int32 RockPatchSize = 24;
+};
+
+/** Original membership remains saved even after individual blocks are mined. */
+USTRUCT()
+struct FPSOreVein
+{
+	GENERATED_BODY()
+	UPROPERTY(SaveGame) FIntPoint Center = FIntPoint::ZeroValue;
+	UPROPERTY(SaveGame) EPSMineralType MineralType = EPSMineralType::None;
+	UPROPERTY(SaveGame) TArray<FIntPoint> Cells;
+};
+
 USTRUCT(BlueprintType)
 struct FPSTileCell
 {
@@ -98,6 +132,10 @@ struct FPSTileCell
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSMineralType MineralType = EPSMineralType::None;
 
+	/** Index into the owning chunk's original veins; INDEX_NONE denotes plain rock. */
+	UPROPERTY(SaveGame)
+	int32 VeinId = INDEX_NONE;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	EPSCropType CropType = EPSCropType::None;
 
@@ -114,6 +152,32 @@ struct FPSTileCell
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	uint8 Variant = 0;
+
+	/** Authored stamps keep their exact source piece instead of running auto-tiling. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	bool bFixedVariant = false;
+
+	/** A grass-centered piece may still use the water artwork family. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	bool bWaterArtwork = false;
+};
+
+USTRUCT(BlueprintType)
+struct FPSTileStamp
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FIntPoint Origin = FIntPoint::ZeroValue;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "11"))
+	int32 Set = 1;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool bWater = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (EditCondition = "Set == 6"))
+	bool bVertical = false;
 };
 
 USTRUCT()
@@ -126,6 +190,9 @@ struct FPSChunkData
 
 	UPROPERTY()
 	TArray<FPSTileCell> Cells;
+
+	UPROPERTY()
+	TArray<FPSOreVein> Veins;
 };
 
 USTRUCT()
@@ -138,6 +205,9 @@ struct FPSChunkSaveData
 
 	UPROPERTY(SaveGame)
 	TArray<FPSTileCell> Cells;
+
+	UPROPERTY(SaveGame)
+	TArray<FPSOreVein> Veins;
 };
 
 namespace PSGrid

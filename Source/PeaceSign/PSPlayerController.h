@@ -151,6 +151,7 @@ private:
 	friend class FPSFishingFlowTest;
 	friend class FPSFarmingInventoryTest;
 	friend class FPSMiningTest;
+	friend class FPSShovelTest;
 	friend class FPSGameplayInputMappingTest;
 	void HandleFishingRod();
 	bool AreFishingControlsLocked() const;

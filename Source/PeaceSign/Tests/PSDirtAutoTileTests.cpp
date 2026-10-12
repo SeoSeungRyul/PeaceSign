@@ -52,13 +52,21 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 		PSDirtAutoTile::SelectDefaultVariant(255, 0), static_cast<uint8>(32));
 	TestEqual(TEXT("Irrelevant diagonals do not turn a straight edge into a narrow path"),
 		PSDirtAutoTile::SelectDefaultVariant(462 | PSDirtAutoTile::NorthWest, 0), static_cast<uint8>(11));
-	TestEqual(TEXT("Unsupported inner corners use solid dirt instead of inventing four holes"),
+	TestEqual(TEXT("Opposite inner corners use Set10 instead of solid dirt"),
 		PSDirtAutoTile::SelectDefaultVariant(511 & ~PSDirtAutoTile::NorthWest & ~PSDirtAutoTile::SouthEast, 0),
-		static_cast<uint8>(23));
+		static_cast<uint8>(65));
 	TestEqual(TEXT("Isolated dirt uses Set1 MM"),
 		PSDirtAutoTile::SelectDefaultVariant(PSDirtAutoTile::Center, 0), static_cast<uint8>(5));
 	TestEqual(TEXT("Fully surrounded dirt uses Set3 MM"),
 		PSDirtAutoTile::SelectDefaultVariant(511, 0), static_cast<uint8>(23));
+	const uint16 MixedCornerMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270};
+	for (int32 I = 0; I < UE_ARRAY_COUNT(MixedCornerMasks); ++I)
+	{
+		TestEqual(TEXT("Mixed straight/inner corner uses its exact Set7-11 artwork"),
+			PSDirtAutoTile::SelectDefaultVariant(MixedCornerMasks[I], 1234), uint8(52 + I));
+		TestEqual(TEXT("Mixed corner retains its diagonal, not just cardinal connectivity"),
+			PSDirtAutoTile::GetDefaultVariantMask(uint8(52 + I)), MixedCornerMasks[I]);
+	}
 	TestEqual(TEXT("Top edge uses continuous Set2 MT"),
 		PSDirtAutoTile::SelectDefaultVariant(462, 0), static_cast<uint8>(11));
 	TestEqual(TEXT("Left edge uses continuous Set2 LM"),
@@ -99,11 +107,17 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 		}
 	}
 
-	for (uint8 Variant = 1; Variant <= 51; ++Variant)
+	for (uint8 Variant = 1; Variant <= PSDirtAutoTile::VariantCount; ++Variant)
 	{
 		const TCHAR* Path = PSDirtAutoTile::GetDefaultVariantTexturePath(Variant);
 		UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, Path);
 		TestNotNull(TEXT("Every imported dirt texture resolves from its default asset path"), Texture);
+		if (Texture && Variant >= 52)
+		{
+			TestEqual(TEXT("New dirt tile width"), Texture->Source.GetSizeX(), int64(144));
+			TestEqual(TEXT("New dirt tile height"), Texture->Source.GetSizeY(), int64(144));
+			TestEqual(TEXT("New dirt source is readable BGRA"), Texture->Source.GetFormat(), TSF_BGRA8);
+		}
 		if (Texture && Texture->Source.GetFormat() == TSF_BGRA8)
 		{
 			FTilePixels& Pixels = TilePixels.Add(Variant);
@@ -146,6 +160,76 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 		Neighbor.GroundType = EPSTileType::Grass;
 	}
 	Grid->LoadedChunks.Reset();
+
+	// Reproduce each new mixed/three-concave combination in the real grid,
+	// and inspect source-image edges rather than accepting the old 15% tolerance.
+	constexpr int32 CaseCellPixels = 48, CaseSize = CaseCellPixels * 3;
+	TArray<FColor> MixedPreview;
+	constexpr int32 CaseRows = (UE_ARRAY_COUNT(MixedCornerMasks) + 3) / 4;
+	MixedPreview.Init(FColor::Magenta, CaseSize * 4 * CaseSize * CaseRows);
+	for (int32 Case = 0; Case < UE_ARRAY_COUNT(MixedCornerMasks); ++Case)
+	{
+		FPSChunkData& Chunk = Grid->GetOrCreateChunk(FIntPoint::ZeroValue);
+		for (FPSTileCell& Tile : Chunk.Cells)
+		{
+			Tile = FPSTileCell();
+			Tile.GroundType = EPSTileType::Grass;
+		}
+		Chunk.Cells[CenterCell.Y * Grid->ChunkSize + CenterCell.X].GroundType = EPSTileType::Dirt;
+		for (int32 D = 0; D < 8; ++D)
+			if (MixedCornerMasks[Case] & (1 << D))
+			{
+				const FIntPoint C = CenterCell + Offsets[D];
+				Chunk.Cells[C.Y * Grid->ChunkSize + C.X].GroundType = EPSTileType::Dirt;
+			}
+		const FPSChunkData Render = Grid->BuildRenderChunkData(FIntPoint::ZeroValue, Chunk);
+		const uint8 V = Render.Cells[CenterCell.Y * Grid->ChunkSize + CenterCell.X].Variant;
+		TestEqual(TEXT("World renderer selects new mixed-corner piece"), V, uint8(52 + Case));
+		const FTilePixels* CenterPixels = TilePixels.Find(V);
+		if (CenterPixels && CenterPixels->Width == 144 && CenterPixels->Height == 144 && !CenterPixels->Data.IsEmpty())
+		{
+			const FIntPoint SamplePoints[] = {{72,0}, {143,72}, {72,143}, {0,72},
+				{0,0}, {143,0}, {143,143}, {0,143}, {72,72}};
+			uint16 SourceMask = 0;
+			for (int32 Bit = 0; Bit < 9; ++Bit)
+				if (!CenterPixels->IsGrass(SamplePoints[Bit].X, SamplePoints[Bit].Y)) SourceMask |= 1 << Bit;
+			TestEqual(TEXT("Imported dirt pixels agree with the new mask"), SourceMask, MixedCornerMasks[Case]);
+		}
+		for (int32 D = 0; D < 4; ++D)
+		{
+			const FIntPoint C = CenterCell + Offsets[D];
+			const FTilePixels* Neighbor = TilePixels.Find(Render.Cells[C.Y * Grid->ChunkSize + C.X].Variant);
+			if (!CenterPixels || !Neighbor || CenterPixels->Data.IsEmpty() || Neighbor->Data.IsEmpty()) continue;
+			int32 Mismatches = 0;
+			for (int32 S = 0; S < 144; ++S)
+			{
+				const int32 AX = D == 1 ? 143 : D == 3 ? 0 : S;
+				const int32 AY = D == 0 ? 0 : D == 2 ? 143 : S;
+				const int32 BX = D == 1 ? 0 : D == 3 ? 143 : S;
+				const int32 BY = D == 0 ? 143 : D == 2 ? 0 : S;
+				Mismatches += CenterPixels->IsGrass(AX, AY) != Neighbor->IsGrass(BX, BY);
+			}
+			TestTrue(*FString::Printf(TEXT("Set7-11 case %d side %d closes its seam (%d pixels)"), Case, D, Mismatches),
+				Mismatches <= 3);
+		}
+		for (int32 Y = 0; Y < CaseSize; ++Y)
+			for (int32 X = 0; X < CaseSize; ++X)
+			{
+				const FIntPoint C = CenterCell - FIntPoint(1, 1) + FIntPoint(X / CaseCellPixels, Y / CaseCellPixels);
+				const FTilePixels* P = TilePixels.Find(Render.Cells[C.Y * Grid->ChunkSize + C.X].Variant);
+				if (!P || P->Data.IsEmpty()) continue;
+				const int32 SX = (X % CaseCellPixels) * P->Width / CaseCellPixels;
+				const int32 SY = (Y % CaseCellPixels) * P->Height / CaseCellPixels;
+				const int64 I = (static_cast<int64>(SY) * P->Width + SX) * 4;
+				const int32 PX = (Case % 4) * CaseSize + X, PY = (Case / 4) * CaseSize + Y;
+				MixedPreview[PY * CaseSize * 4 + PX] = FColor(P->Data[I+2], P->Data[I+1], P->Data[I], 255);
+			}
+		Grid->LoadedChunks.Reset();
+	}
+	if (FParse::Param(FCommandLine::Get(), TEXT("ExportTileVisuals")))
+		TestTrue(TEXT("Mixed-corner preview exported"),
+			FImageUtils::SaveImageByExtension(*(FPaths::ProjectSavedDir() / TEXT("TileDiagnostics/DirtMixedCorners.png")),
+				FImageView(MixedPreview.GetData(), CaseSize * 4, CaseSize * CaseRows)));
 
 	// Validate artwork, not just IDs: a rounded grass patch must keep the
 	// same terrain on both sides of each shared image edge, even under stones.
@@ -234,6 +318,31 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Grass is the dominant non-water terrain"), GrassCount > DirtCount * 4);
 	TestTrue(TEXT("Dirt patches are present"), DirtCount > 100);
 	TestTrue(TEXT("Dirt is clustered instead of mostly isolated noise"), IsolatedDirtCount * 5 < DirtCount);
+
+	// Fresh terrain must have no Set6-like one-cell-wide fingers, including at
+	// world edges, chunk seams and lakes. Repeat with multiple world seeds.
+	for (const int32 Seed : {1337, 42, 2026})
+	{
+		Grid->WorldSeed = Seed;
+		for (int32 Y = -Grid->WorldHalfExtentInCells; Y < Grid->WorldHalfExtentInCells; ++Y)
+			for (int32 X = -Grid->WorldHalfExtentInCells; X < Grid->WorldHalfExtentInCells; ++X)
+			{
+				const FIntPoint Cell(X, Y);
+				if (Grid->GenerateGroundTile(Cell) != EPSTileType::Dirt) continue;
+				bool bHasSolidBlock = false;
+				for (int32 DY = -1; DY <= 0; ++DY)
+					for (int32 DX = -1; DX <= 0; ++DX)
+					{
+						const FIntPoint Origin = Cell + FIntPoint(DX, DY);
+						bHasSolidBlock |= Grid->GenerateGroundTile(Origin) == EPSTileType::Dirt
+							&& Grid->GenerateGroundTile(Origin + FIntPoint(1, 0)) == EPSTileType::Dirt
+							&& Grid->GenerateGroundTile(Origin + FIntPoint(0, 1)) == EPSTileType::Dirt
+							&& Grid->GenerateGroundTile(Origin + FIntPoint(1, 1)) == EPSTileType::Dirt;
+					}
+				TestTrue(TEXT("Every generated dirt cell belongs to a solid 2x2 block"), bHasSolidBlock);
+			}
+	}
+	Grid->WorldSeed = 1337;
 
 	APSTileChunkActor* Renderer = World->SpawnActor<APSTileChunkActor>();
 	FPSChunkData Chunk;

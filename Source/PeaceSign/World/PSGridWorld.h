@@ -71,6 +71,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult TillCell(FIntPoint Cell);
 
+	/** Toggle unoccupied grass/dirt and refresh neighboring terrain transitions. */
+	UFUNCTION(BlueprintCallable, Category = "Grid World")
+	EPSTileInteractionResult ShovelCell(FIntPoint Cell);
+
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult PlantSeed(FIntPoint Cell, int32 CropId = 0);
 
@@ -89,6 +93,17 @@ public:
 	UFUNCTION(CallInEditor, Category = "Grid World|Editor Preview", meta = (DisplayName = "Clear Grid Preview"))
 	void ClearEditorPreview();
 
+	/** Add the selected stamp to the map's authored layout; does not overwrite save files. */
+	UFUNCTION(CallInEditor, Category = "Grid World|Tile Stamps", meta = (DisplayName = "Add Tile Stamp"))
+	void AddTileStamp();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid World|Tile Stamps")
+	FPSTileStamp SelectedTileStamp;
+
+	/** Later stamps win overlaps. Existing saved cells take precedence at runtime. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid World|Tile Stamps")
+	TArray<FPSTileStamp> TileStamps;
+
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	float GetCellSize() const { return CellSize; }
 
@@ -103,7 +118,7 @@ protected:
 	float CellSize = 100.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World", meta = (ClampMin = "1", ClampMax = "64"))
-	int32 ChunkSize = 16;
+	int32 ChunkSize = 32;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World", meta = (ClampMin = "0", ClampMax = "8"))
 	int32 LoadRadius = 2;
@@ -128,10 +143,13 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Mining")
 	TArray<FPSMineralSpawnRule> MineralSpawnRules;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Mining")
+	FPSOreGenerationSettings OreGenerationSettings;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Rendering")
 	TSubclassOf<APSTileChunkActor> ChunkActorClass;
 
-	/** Optional rule override. The imported Dirt Set1-6 textures are used when this is unset. */
+	/** Optional rule override. The imported Dirt Set1-8 textures are used when this is unset. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Rendering")
 	TObjectPtr<UPSDirtAutoTileSet> DirtAutoTileSet;
 
@@ -145,12 +163,22 @@ protected:
 
 private:
 	friend class FPSDirtAutoTileTest;
+	friend class FPSTileStampTest;
+	friend class FPSShovelTest;
+	friend class FPSWaterAutoTileTest;
 	friend class FPSCropGrowthTest;
 	friend class FPSFishingTest;
 	friend class FPSFarmingInventoryTest;
 	friend class FPSMiningTest;
+	friend class FPSOreVeinTest;
+	bool IsMiningEligible(FIntPoint Cell) const;
+	void EnsureMiningGeneration() const;
+	const FPSChunkData& GetGeneratedMiningChunk(FIntPoint ChunkCoordinate) const;
+	uint32 MiningInputsHash() const;
 	bool IsLakeCell(FIntPoint Cell) const;
 	bool IsDirtPatchCell(FIntPoint Cell) const;
+	bool IsRawDirtPatchCell(FIntPoint Cell) const;
+	bool BuildStampedCell(FIntPoint Cell, FPSTileCell& OutCell) const;
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();
 	int64 GetGrowthHalfHour() const;
@@ -163,6 +191,7 @@ private:
 	FPSChunkData GenerateChunk(FIntPoint ChunkCoordinate) const;
 	FPSChunkData BuildRenderChunkData(FIntPoint ChunkCoordinate, const FPSChunkData& Source) const;
 	uint16 BuildDirtNeighborMask(FIntPoint Cell) const;
+	uint16 BuildTerrainNeighborMask(FIntPoint Cell, EPSTileType Terrain) const;
 	FPSChunkData& GetOrCreateChunk(FIntPoint ChunkCoordinate);
 	void UpdateActiveChunks(FIntPoint PlayerChunk);
 	void SpawnChunkRenderer(FIntPoint ChunkCoordinate);
@@ -179,6 +208,13 @@ private:
 
 	TMap<FIntPoint, FPSChunkData> LoadedChunks;
 	TMap<FIntPoint, FPSChunkSaveData> ModifiedChunks;
+	// Unvisited query/preview results are cached but do not count as visited saves.
+	mutable TMap<FIntPoint, FPSChunkData> GeneratedMiningChunks;
+	mutable bool bMiningGenerationReady = false;
+	mutable uint32 CachedMiningInputsHash = 0;
+	mutable double MinimumMiningDistance = 0.0;
+	mutable double MaximumMiningDistance = 0.0;
+	int32 MiningGenerationVersion = 1;
 	int32 StartingWorldSeed = 1337;
 	FIntPoint LastPlayerChunk = FIntPoint(MAX_int32, MAX_int32);
 };

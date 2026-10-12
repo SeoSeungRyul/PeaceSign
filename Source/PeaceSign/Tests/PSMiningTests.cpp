@@ -145,7 +145,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Bare-hand hit removes ten health"), Grid->GetStoneHealth(StoneCell), 20);
 	if (UPSWorldSaveGame* PartialSave = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0)))
 	{
-		TestEqual(TEXT("Mining save uses the object-layer data version"), PartialSave->DataVersion, 3);
+		TestEqual(TEXT("Mining save uses the vein data version"), PartialSave->DataVersion, 4);
 		const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(StoneCell, Grid->ChunkSize);
 		const FPSChunkSaveData* PartialChunk = PartialSave->ModifiedChunks.FindByPredicate(
 			[ChunkCoordinate](const FPSChunkSaveData& Chunk) { return Chunk.Coordinate == ChunkCoordinate; });
@@ -230,7 +230,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	if (StoneInstances)
 		TestEqual(TEXT("Reset immediately restores the visible stone instance"),
 			StoneInstances->GetInstanceCount(), InitialRenderedStones);
-	TestFalse(TEXT("Reset deletes the modified world save"), UGameplayStatics::DoesSaveGameExist(Slot, 0));
+	TestTrue(TEXT("Reset saves a clean world with the original generation metadata"), UGameplayStatics::DoesSaveGameExist(Slot, 0));
 	APSGridWorld* FreshGrid = World->SpawnActorDeferred<APSGridWorld>(
 		APSGridWorld::StaticClass(), FTransform(FVector(200000, 0, 0)));
 	FreshGrid->SaveSlotName = Slot;
@@ -296,7 +296,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	OreChunk.Cells[OreIndex].MineralType = EPSMineralType::Copper;
 	OreChunk.Cells[OreIndex].ObjectHealth = APSGridWorld::GetStoneMaxHealth(EPSMineralType::Copper);
 	Grid->RebuildChunk(StoneChunk);
-	Controller->SelectHotbarSlot(4);
+	Controller->SelectHotbarSlot(5);
 	const int32 CopperOreBeforeBareHands = CountCopperOre();
 	for (int32 Hit = 0; Hit < 4; ++Hit)
 		TestEqual(TEXT("Bare hands can damage a copper block"),
@@ -323,6 +323,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	APSGridWorld* LegacyGrid = World->SpawnActorDeferred<APSGridWorld>(
 		APSGridWorld::StaticClass(), FTransform(FVector(300000, 0, 0)));
 	LegacyGrid->SaveSlotName = LegacySlot;
+	LegacyGrid->MineralSpawnRules.Reset(); // Isolate old HP conversion from legacy mineral assignment.
 	LegacyGrid->FinishSpawning(FTransform(FVector(300000, 0, 0)));
 	LegacyGrid->LoadWorld();
 	TestEqual(TEXT("Legacy stone health two migrates to twenty"),

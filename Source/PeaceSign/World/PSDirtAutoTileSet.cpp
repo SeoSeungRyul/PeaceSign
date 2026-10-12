@@ -64,8 +64,27 @@ namespace
 		{264, TEXT("/Game/Art/Tiles/Dirt/Set6/Set_H/3_Dirt_Set6_RH.3_Dirt_Set6_RH")},
 		{260, TEXT("/Game/Art/Tiles/Dirt/Set6/Set_V/1_Dirt_Set6_TV.1_Dirt_Set6_TV")},
 		{261, TEXT("/Game/Art/Tiles/Dirt/Set6/Set_V/2_Dirt_Set6_stV.2_Dirt_Set6_stV")},
-		{257, TEXT("/Game/Art/Tiles/Dirt/Set6/Set_V/3_Dirt_Set6_BV.3_Dirt_Set6_BV")}
+		{257, TEXT("/Game/Art/Tiles/Dirt/Set6/Set_V/3_Dirt_Set6_BV.3_Dirt_Set6_BV")},
+		{398, TEXT("/Game/Art/Tiles/Dirt/Set7/Dirt_Set7_LT.Dirt_Set7_LT")},
+		{334, TEXT("/Game/Art/Tiles/Dirt/Set7/Dirt_Set7_RT.Dirt_Set7_RT")},
+		{283, TEXT("/Game/Art/Tiles/Dirt/Set7/Dirt_Set7_LB.Dirt_Set7_LB")},
+		{299, TEXT("/Game/Art/Tiles/Dirt/Set7/Dirt_Set7_RB.Dirt_Set7_RB")},
+		{295, TEXT("/Game/Art/Tiles/Dirt/Set8/Dirt_Set8_LT.Dirt_Set8_LT")},
+		{285, TEXT("/Game/Art/Tiles/Dirt/Set8/Dirt_Set8_RT.Dirt_Set8_RT")},
+		{327, TEXT("/Game/Art/Tiles/Dirt/Set8/Dirt_Set8_LB.Dirt_Set8_LB")},
+		{397, TEXT("/Game/Art/Tiles/Dirt/Set8/Dirt_Set8_RB.Dirt_Set8_RB")},
+		{287, TEXT("/Game/Art/Tiles/Dirt/Set9/Dirt_Set9_LT.Dirt_Set9_LT")},
+		{303, TEXT("/Game/Art/Tiles/Dirt/Set9/Dirt_Set9_RT.Dirt_Set9_RT")},
+		{399, TEXT("/Game/Art/Tiles/Dirt/Set9/Dirt_Set9_LB.Dirt_Set9_LB")},
+		{335, TEXT("/Game/Art/Tiles/Dirt/Set9/Dirt_Set9_RB.Dirt_Set9_RB")},
+		{351, TEXT("/Game/Art/Tiles/Dirt/Set10/Dirt_Set10_L.Dirt_Set10_L")},
+		{431, TEXT("/Game/Art/Tiles/Dirt/Set10/Dirt_Set10_R.Dirt_Set10_R")},
+		{267, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_T.Dirt_Set11_T")},
+		{269, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_L.Dirt_Set11_L")},
+		{263, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_R.Dirt_Set11_R")},
+		{270, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_B.Dirt_Set11_B")}
 	};
+	static_assert(UE_ARRAY_COUNT(DefaultRules) == PSDirtAutoTile::VariantCount);
 
 	template <typename GetMask, typename GetWeight>
 	uint8 SelectMatchingVariant(const int32 Count, const uint16 Mask, const uint32 Seed,
@@ -119,6 +138,10 @@ namespace
 		case 281: return 27; // Set3 RB
 		case 266: return 47; // Set6 horizontal straight
 		case 261: return 50; // Set6 vertical straight
+		case 267: return 66; // Set11 T: straight bottom, two top inner corners
+		case 269: return 67; // Set11 L: straight right
+		case 263: return 68; // Set11 R: straight left
+		case 270: return 69; // Set11 B: straight top
 		default: return PSDirtAutoTile::NoVariant;
 		}
 	}
@@ -155,15 +178,15 @@ UTexture2D* UPSDirtAutoTileSet::GetVariantTexture(const uint8 Variant) const
 	return Variant > 0 && Rules.IsValidIndex(Variant - 1) ? Rules[Variant - 1].Texture : nullptr;
 }
 
-uint8 PSDirtAutoTile::SelectDefaultVariant(const uint16 Mask, const uint32 Seed)
+uint8 PSDirtAutoTile::SelectDefaultVariant(const uint16 Mask, const uint32 Seed, const uint8 VariantLimit)
 {
 	// Grass occupies its whole cell. Transition geometry belongs to adjacent dirt cells.
 	if ((Mask & Center) == 0) return 32;
 	const uint16 Normalized = NormalizeDirtMask(Mask);
-	const auto Exact = [Seed](const uint16 Candidate)
+	const auto Exact = [Seed, VariantLimit](const uint16 Candidate)
 	{
-		if (const uint8 Preferred = GetPreferredDefaultVariant(Candidate)) return Preferred;
-		return SelectMatchingVariant(UE_ARRAY_COUNT(DefaultRules), Candidate, Seed,
+		if (const uint8 Preferred = GetPreferredDefaultVariant(Candidate); Preferred && Preferred <= VariantLimit) return Preferred;
+		return SelectMatchingVariant(FMath::Min<int32>(VariantLimit, UE_ARRAY_COUNT(DefaultRules)), Candidate, Seed,
 			[](const int32 Index) { return DefaultRules[Index].Mask; },
 			[](const int32) { return 1; });
 	};

@@ -94,10 +94,11 @@ void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment, const i
 	const bool bSeed = InEquipment == EPSEquipment::Seed;
 	const bool bFishing = InEquipment == EPSEquipment::FishingRod;
 	const bool bPickaxe = InEquipment == EPSEquipment::Pickaxe;
+	const bool bShovel = InEquipment == EPSEquipment::Shovel;
 	const bool bUnusable = InEquipment == EPSEquipment::UnusableItem;
 	const FString Key = HotbarSlot == 9 ? TEXT("0") : HotbarSlot >= 0 ? FString::FromInt(HotbarSlot + 1) : TEXT("-");
 	const FString ItemName = bHoe ? TEXT("괭이") : bSeed ? TEXT("씨앗") : bFishing ? TEXT("낚싯대")
-		: bPickaxe ? TEXT("돌 곡괭이") : bUnusable ? TEXT("사용할 수 없는 아이템") : TEXT("맨손");
+		: bPickaxe ? TEXT("돌 곡괭이") : bShovel ? TEXT("삽") : bUnusable ? TEXT("사용할 수 없는 아이템") : TEXT("맨손");
 	const FString Count = bSeed ? FString::Printf(TEXT("  x%d"), FMath::Max(0, Quantity)) : TEXT("");
 	EquipmentLabel->SetText(FText::FromString(FString::Printf(TEXT("[%s] 현재 장비  ·  %s%s"), *Key, *ItemName, *Count)));
 	EquipmentHint->SetText(bHoe
@@ -106,6 +107,7 @@ void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment, const i
 			? NSLOCTEXT("Equipment", "SeedHint", "우클릭 · 씨앗 1개 심기\n[1~0] 인벤토리 첫 줄 선택")
 			: bFishing ? NSLOCTEXT("Equipment", "FishingRodHint", "직선 2칸 / 대각선 1칸 내 물칸 우클릭 · 낚시 시작 / 이동 시 해제\n[1~0] 인벤토리 첫 줄 선택")
 			: bPickaxe ? NSLOCTEXT("Equipment", "PickaxeHint", "직선 2칸 / 대각선 1칸 내 돌 우클릭 · 채굴\n[1~0] 인벤토리 첫 줄 선택")
+			: bShovel ? NSLOCTEXT("Equipment", "ShovelHint", "우클릭 · 풀 ↔ 흙 전환\n[1~0] 인벤토리 첫 줄 선택")
 			: bUnusable ? NSLOCTEXT("Equipment", "UnusableHint", "이 아이템은 아직 사용할 수 없습니다.\n[1~0] 인벤토리 첫 줄 선택")
 			: NSLOCTEXT("Equipment", "BareHandsHint", "우클릭 · 작물 제거\n[1~0] 인벤토리 첫 줄 선택 · 빈 슬롯은 맨손"));
 	EquipmentLabel->SetColorAndOpacity(FSlateColor(bHoe
