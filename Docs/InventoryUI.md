@@ -1,5 +1,16 @@
 # 인벤토리 데이터와 UI
 
+## 인게임 채집 아이템 미리보기
+
+기본 가방은 10칸이고 단축바 10칸은 별도다. 원목 6종과 씨앗 6종은 서로 다른 아이템이므로 가방에 전부 두려면 최소 12칸이 필요하다. 이전 자동화 화면의 테스트 아이템은 실제 플레이 저장에 지급하지 않았다.
+
+에디터에서 Play를 실행한 뒤 콘솔에 `PS.Gathering.PreviewItems`를 입력하면 보유하지 않은 원목·씨앗을 각각 1개씩 지급하고 인벤토리를 연다. 필요한 만큼만 가방을 10칸 단위로 열며, 기존 아이템과 단축바는 유지한다. 이미 보유한 종류는 추가하지 않아 재실행해도 중복 지급하지 않는다. 50칸이 전부 차서 수용할 수 없으면 아무것도 바꾸지 않는다. 명령은 Shipping 빌드에 등록하지 않으며 새 게임에 자동 지급하거나 기본 가방 크기를 바꾸지 않는다. 일반 플레이 저장에서 사용하면 지급과 열린 칸이 저장되므로 별도 `-UserDir`의 미리보기 게임에서 확인할 수 있다.
+
+`Scripts/PreviewGatheringInventory.ps1`을 실행하면 현재 프로젝트의 SaveGames를 별도 테스트 폴더에 복사하고, 그 복사본으로 실제 게임 창을 열어 지급 명령과 인벤토리 열기를 자동 실행한다. 원래 저장에는 쓰지 않는다. 창은 직접 조작할 수 있도록 유지하며 I/Esc로 인벤토리를 닫고 이동할 수 있다. 실제 화면은 테스트 폴더의 `Saved/GatheringPreviewInGame.png`에 저장한다.
+
+2026-11-02 실제 플레이 확인: 원본 저장은 가방 10칸 중 1칸을 사용 중이었다. 복사본에서 20칸으로 열고 기존 물고기와 원목·씨앗 12종을 함께 표시했다. 원본 SaveGames 4개의 SHA-256이 실행 전후 같음을 확인했다. 전체 자동화 테스트 30개가 성공했으며, `PeaceSign.Gathering.PreviewGrantPreservesInventory`가 중복 지급 방지·기존 아이템 보존·칸 확장 저장·최대 50칸 포화 시 전체 지급 거부를 검증한다. [실제 게임 화면](Images/GatheringInventory-InGame-20261102.png)을 참고한다.
+
+
 2026-11-02: 나무 원목 6종과 씨앗 6종은 `DT_Item.IconID` → `DT_GatheringIcon` → `/Game/Art/Gathering/Inventory/T_아이템ID_이름` 순서로 256×256 투명 아이콘을 표시합니다. TestMap의 GridWorld > Gathering > Data > Item Icon Table에 `DT_GatheringIcon`을 연결합니다. 바닥 드롭 수집 시 수종별 ItemId와 수량을 보존해 가방에 넣으며 단축바로 옮겨도 같은 그림을 사용합니다. 가방이 가득 차면 바닥에 남습니다. 사과·밤은 별도 원본 그림이 없어 기존 임시 아이콘을 사용합니다.
 
 아트 연결은 `Scripts/ImportGatheringIcons.py`로 재현합니다. 기존 텍스처·아이콘 행은 보존하며, Item 테이블에서는 원목·씨앗 12행의 IconID만 변경합니다. 원본은 `SourceArt/Gathering/InventoryIcons-256`입니다. 이 아이콘 연결은 씨앗 식재 기능을 추가하지 않습니다. `PeaceSign.Gathering.InventoryIconsAndPickup` 테스트가 6수종의 흔들기·벌목·수집·단축바 이동·저장 복원과 12종 아이콘을 확인합니다.

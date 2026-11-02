@@ -346,6 +346,54 @@ void UPSInventoryComponent::ResetToDefaults()
 	NotifyChanged();
 }
 
+bool UPSInventoryComponent::GrantGatheringPreviewItems()
+{
+#if UE_BUILD_SHIPPING
+	return false;
+#else
+	if (HotbarSlots.Num() != HotbarSlotCount || BagSlots.Num() != MaxBagSlotCount) return false;
+	// Build a complete plan first: a full bag must never receive a partial grant.
+	TArray<FPSItemStack> PlannedBag = BagSlots;
+	int32 PlannedCapacity = UnlockedBagSlotCount;
+	bool bChanged = false;
+	for (int32 Kind = 1; Kind <= 2; ++Kind)
+	{
+		for (int32 Species = 1; Species <= 6; ++Species)
+		{
+			const FName ItemID(*FString::Printf(TEXT("030%d%02d"), Kind, Species));
+			const EPSItemType Type = Kind == 1 ? EPSItemType::Wood : EPSItemType::TreeSeed;
+			const auto Matches = [ItemID, Type](const FPSItemStack& Stack)
+			{
+				return !Stack.IsEmpty() && Stack.ItemType == Type
+					&& UPSGameDataLibrary::CanonicalItemID(Stack.ItemId) == ItemID;
+			};
+			bool bOwned = HotbarSlots.ContainsByPredicate(Matches);
+			for (int32 Index = 0; Index < PlannedCapacity && !bOwned; ++Index) bOwned = Matches(PlannedBag[Index]);
+			if (bOwned) continue;
+			int32 Empty = INDEX_NONE;
+			while (Empty == INDEX_NONE)
+			{
+				for (int32 Index = 0; Index < PlannedCapacity; ++Index)
+					if (PlannedBag[Index].IsEmpty()) { Empty = Index; break; }
+				if (Empty != INDEX_NONE) break;
+				if (PlannedCapacity >= MaxBagSlotCount) return false;
+				PlannedCapacity = FMath::Min(PlannedCapacity + 10, MaxBagSlotCount);
+			}
+			FPSItemStack& Stack = PlannedBag[Empty];
+			Stack.Clear(); Stack.ItemType = Type; Stack.ItemId = ItemID; Stack.Quantity = 1;
+			bChanged = true;
+		}
+	}
+	if (bChanged)
+	{
+		BagSlots = MoveTemp(PlannedBag);
+		UnlockedBagSlotCount = PlannedCapacity;
+		NotifyChanged();
+	}
+	return true;
+#endif
+}
+
 void UPSInventoryComponent::InitializeDefaults()
 {
 	bPendingUpgradedHoeGrant = false;

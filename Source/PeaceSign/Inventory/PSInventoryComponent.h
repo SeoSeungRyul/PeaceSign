@@ -74,6 +74,8 @@ public:
 	bool MoveItem(EPSInventoryArea FromArea, int32 FromIndex, EPSInventoryArea ToArea, int32 ToIndex);
 	UFUNCTION(BlueprintCallable, Category="Inventory")
 	void ResetToDefaults();
+	/** Development preview: add missing log/seed variants and open only the required bag rows. */
+	bool GrantGatheringPreviewItems();
 	UFUNCTION(BlueprintCallable, Category="Inventory|Save")
 	bool SaveInventory() const;
 	UFUNCTION(BlueprintCallable, Category="Inventory|Save")
@@ -89,6 +91,7 @@ public:
 
 private:
 	friend class FPSInventoryPreviewTest;
+	friend class FPSGatheringPreviewTest;
 	void InitializeDefaults();
 	void NotifyChanged();
 	bool TryGrantPendingUpgradedHoe();
