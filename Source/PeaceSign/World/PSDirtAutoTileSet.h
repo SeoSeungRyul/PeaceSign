@@ -73,7 +73,7 @@ namespace PSDirtAutoTile
 	constexpr uint16 Center = 1 << 8;
 	constexpr uint16 CardinalMask = North | East | South | West;
 	constexpr uint8 NoVariant = 0;
-	constexpr uint8 VariantCount = 69;
+	constexpr uint8 VariantCount = 73;
 
 	PEACESIGN_API uint8 SelectDefaultVariant(uint16 Mask, uint32 Seed, uint8 VariantLimit = VariantCount);
 	PEACESIGN_API uint16 GetDefaultVariantMask(uint8 Variant);

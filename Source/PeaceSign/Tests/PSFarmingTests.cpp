@@ -91,17 +91,18 @@ bool FPSFarmingTest::RunTest(const FString& Parameters)
 	Chunk.Cells[2].ObjectType = EPSWorldObjectType::Stone;
 	Chunk.Cells[2].ObjectHealth = APSGridWorld::DefaultStoneHealth;
 	Chunk.Cells[3].GroundType = EPSTileType::TilledSoil;
+	Chunk.Cells[3].Variant = 5;
 	Chunk.Cells[3].CropType = EPSCropType::TestCrop;
 	Renderer->Rebuild(Chunk, 2, 100.0f);
 	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
 	Renderer->GetComponents(Components);
-	TestEqual(TEXT("Ground, seed, and mineral types have renderers"), Components.Num(), 13);
+	TestEqual(TEXT("Ground, farm artwork, wet soil, seed, and mineral renderers"), Components.Num(), 15);
 	const auto ExpectedInstances = [](const UHierarchicalInstancedStaticMeshComponent* Component)
 	{
 		const FName Name = Component->GetFName();
 		if (Name == TEXT("GrassInstances")) return 2;
 		return Name == TEXT("DirtInstances")
-			|| Name == TEXT("StoneInstances") || Name == TEXT("TilledSoilInstances")
+			|| Name == TEXT("StoneInstances") || Name == TEXT("FarmVariant_5_4")
 			|| Name == TEXT("SeedInstances") ? 1 : 0;
 	};
 	for (auto* Component : Components)
@@ -163,10 +164,10 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 	Controller->SelectHotbarSlot(0);
 	TestEqual(TEXT("Slot one equips its hoe"), Controller->GetEquipment(), EPSEquipment::Hoe);
 	TestTrue(TEXT("Moving the selected hoe succeeds"), Controller->InventoryComponent->MoveItem(
-		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Hotbar, 5));
+		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Hotbar, 9));
 	TestEqual(TEXT("Empty selected slot becomes bare hands"), Controller->GetEquipment(), EPSEquipment::BareHands);
 	TestTrue(TEXT("Returning the hoe refreshes equipment"), Controller->InventoryComponent->MoveItem(
-		EPSInventoryArea::Hotbar, 5, EPSInventoryArea::Hotbar, 0));
+		EPSInventoryArea::Hotbar, 9, EPSInventoryArea::Hotbar, 0));
 	TestEqual(TEXT("Returned hoe equips again"), Controller->GetEquipment(), EPSEquipment::Hoe);
 
 	Controller->SelectHotbarSlot(1);
@@ -180,7 +181,13 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 
 	UPSGameTimeSubsystem* Clock = World->GetSubsystem<UPSGameTimeSubsystem>();
 	TestNotNull(TEXT("Growth clock exists"), Clock);
-	Clock->Tick(5760.0f);
+	Controller->SelectHotbarSlot(5);
+	TestEqual(TEXT("Slot six equips watering can"), Controller->GetEquipment(), EPSEquipment::WateringCan);
+	for (int32 Day = 0; Day < 4; ++Day)
+	{
+		TestEqual(TEXT("Equipped watering can waters crop"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Watered);
+		Clock->AdvanceGameDays(1);
+	}
 	TestEqual(TEXT("Crop reaches harvest stage"), Grid->GetCropStage(Cells[0]), PSCropGrowth::MaxStage);
 	Controller->SelectHotbarSlot(0);
 	TestEqual(TEXT("Hoe harvest succeeds"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Harvested);
@@ -192,7 +199,11 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 
 	Controller->SelectHotbarSlot(1);
 	TestEqual(TEXT("Second seed plants"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::Planted);
-	Clock->Tick(5760.0f);
+	for (int32 Day = 0; Day < 4; ++Day)
+	{
+		Grid->WaterCell(Cells[1]);
+		Clock->AdvanceGameDays(1);
+	}
 	TestTrue(TEXT("Produce stack can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::TestCrop, 998, 0));
 	TestTrue(TEXT("Remaining bag cells can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::Wood, 8991));
 	Controller->SelectHotbarSlot(0);

@@ -8,6 +8,9 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "Components/SizeBox.h"
+#include "Components/UniformGridPanel.h"
+#include "Components/Overlay.h"
+#include "Components/ScrollBox.h"
 #include "Engine/World.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Kismet/GameplayStatics.h"
@@ -48,6 +51,45 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Inventory releases the hotbar when closed"), Widget->IsHotbarAttached());
 	Widget->AttachHotbar(Hotbar);
 	TestNotNull(TEXT("Hotbar builds its visual tree"), Hotbar->WidgetTree->RootWidget.Get());
+	// Exercise the actual artist-authored nested WBP, not only the procedural fallback.
+	UClass* DesignerClass = LoadClass<UPSInventoryWidget>(nullptr,
+		TEXT("/Game/UI/Inventory/WBP_Inventory.WBP_Inventory_C"));
+	UPSInventoryWidget* Designer = DesignerClass ? CreateWidget<UPSInventoryWidget>(World, DesignerClass) : nullptr;
+	UScrollBox* DesignerScroll = nullptr;
+	if (TestNotNull(TEXT("Designer inventory asset loads"), Designer))
+	{
+		UWidget* AuthoredRoot = Designer->WidgetTree->RootWidget;
+		Designer->NativeOnInitialized();
+		bool bPreservedRoot = false;
+		Designer->WidgetTree->ForEachWidget([&](UWidget* Child) { bPreservedRoot |= Child == AuthoredRoot; });
+		TestTrue(TEXT("Authored tree is preserved inside responsive frame"), bPreservedRoot);
+		TestTrue(TEXT("Designer bindings connect"), Designer->HotbarHost != nullptr);
+		Designer->SetInventoryComponent(Inventory);
+		Widget->DetachHotbar();
+		Designer->AttachHotbar(Hotbar);
+		TestTrue(TEXT("Designer hosts the same hotbar data source"), Designer->IsHotbarAttached());
+		TestNotNull(TEXT("Designer has interactive hotbar cells"), Designer->HotbarHost ? Designer->HotbarHost->GetContent() : nullptr);
+		int32 BagCells = 0;
+		int32 HotbarCells = 0;
+		TFunction<void(UUserWidget*)> CountCells;
+		CountCells = [&](UUserWidget* Owner)
+		{
+			Owner->WidgetTree->ForEachWidget([&](UWidget* Child)
+			{
+				if (Child->GetFName() == TEXT("ScrollBox_Bag")) DesignerScroll = Cast<UScrollBox>(Child);
+				BagCells += Child->IsA<UPSInventorySlotWidget>() ? 1 : 0;
+				HotbarCells += Child->IsA<UPSHotbarSlotWidget>() ? 1 : 0;
+				if (UUserWidget* Nested = Cast<UUserWidget>(Child)) CountCells(Nested);
+			});
+		};
+		CountCells(Designer);
+		TestEqual(TEXT("All saved bag slots have designer drop targets"), BagCells, UPSInventoryComponent::MaxBagSlotCount);
+		TestEqual(TEXT("Designer has ten hotbar drop targets"), HotbarCells, UPSInventoryComponent::HotbarSlotCount);
+		TestNotNull(TEXT("Designer keeps its bag scroll viewport"), DesignerScroll);
+		TestEqual(TEXT("Designer detach preserves original hotbar"), Designer->DetachHotbar(), Hotbar);
+		Widget->AttachHotbar(Hotbar);
+		Designer->ReleaseSlateResources(true);
+	}
 	UCanvasPanel* HotbarCanvas = Cast<UCanvasPanel>(Hotbar->WidgetTree->RootWidget);
 	TestNotNull(TEXT("Hotbar uses a full-screen positioning canvas"), HotbarCanvas);
 	UCanvasPanelSlot* HotbarFrameSlot = HotbarCanvas && HotbarCanvas->GetChildrenCount() > 0
@@ -64,7 +106,7 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Hotbar owns ten independent slots"), Inventory->HotbarSlots.Num(), UPSInventoryComponent::HotbarSlotCount);
 	TestEqual(TEXT("Bag owns fifty expandable slots"), Inventory->BagSlots.Num(), UPSInventoryComponent::MaxBagSlotCount);
 	TestEqual(TEXT("Ten bag slots start unlocked"), Inventory->GetUnlockedBagSlotCount(), 10);
-	TestEqual(TEXT("Starter hoe is real inventory data"), Inventory->CountItem(EPSItemType::Hoe), 1);
+	TestEqual(TEXT("Basic and both temporary upgraded hoes are real inventory data"), Inventory->CountItem(EPSItemType::Hoe), 3);
 	TestEqual(TEXT("Starter seeds are real inventory data"), Inventory->CountItem(EPSItemType::TestSeed), 24);
 	TestEqual(TEXT("Starter fishing rod remains usable from hotbar slot three"), Inventory->GetHotbarSlot(2).ItemType, EPSItemType::FishingRod);
 	TestEqual(TEXT("Starter rod is the wooden tier"), Inventory->GetHotbarSlot(2).ItemId, PSItemIds::WoodenFishingRod);
@@ -121,7 +163,7 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	if (AsteriumSlot != INDEX_NONE)
 	{
 		TestEqual(TEXT("Asterium durability is infinite"), Inventory->BagSlots[AsteriumSlot].CurrentDurability, INDEX_NONE);
-		TestEqual(TEXT("Asterium grants four bonus seconds"), PSItems::GetDefinition(Inventory->BagSlots[AsteriumSlot]).FishingTimeBonus, 4.0f);
+		TestEqual(TEXT("Asterium grants sixty percent bonus time"), PSItems::GetDefinition(Inventory->BagSlots[AsteriumSlot]).FishingTimeBonusRatio, 0.6f);
 	}
 	TestEqual(TEXT("Crop-specific count stays separate"), Inventory->CountItem(EPSItemType::TestSeed, 1), 4);
 	const int32 CropOneSlot = Inventory->BagSlots.IndexOfByPredicate([](const FPSItemStack& Slot)
@@ -149,6 +191,7 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 		LegacySave->Slots[Index] = Inventory->HotbarSlots[Index];
 	LegacySave->Slots[2].Clear();
 	LegacySave->Slots[3].Clear();
+	LegacySave->Slots[5].Clear();
 	LegacySave->UnlockedSlotCount = 10;
 	LegacySave->DataVersion = 0;
 	TestTrue(TEXT("Legacy inventory fixture saves"), UGameplayStatics::SaveGameToSlot(LegacySave, Inventory->SaveSlotName, 0));
@@ -159,6 +202,7 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Legacy rod receives full durability"), LoadedInventory->GetHotbarSlot(2).CurrentDurability, 100);
 	TestEqual(TEXT("Legacy save receives a pickaxe in slot four"), LoadedInventory->GetHotbarSlot(3).ItemType, EPSItemType::Pickaxe);
 	TestTrue(TEXT("Legacy migration creates a separate empty bag"), LoadedInventory->GetBagSlot(0).IsEmpty());
+	TestEqual(TEXT("Legacy inventory receives watering can in slot six"), LoadedInventory->GetHotbarSlot(5).ItemType, EPSItemType::WateringCan);
 	UPSInventorySaveGame* OccupiedSlotSave = NewObject<UPSInventorySaveGame>();
 	OccupiedSlotSave->DataVersion = 3;
 	OccupiedSlotSave->HotbarSlots = Inventory->HotbarSlots;
@@ -187,10 +231,25 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	Widget->SelectItem(0);
 	if (FParse::Param(FCommandLine::Get(), TEXT("PSInventoryRender")))
 	{
+		if (Designer)
+		{
+			Widget->DetachHotbar();
+			Designer->AttachHotbar(Hotbar);
+		}
 		auto* Renderer = new FWidgetRenderer(true);
+		// Keep Slate alive between paints; DrawWidget's temporary window otherwise
+		// releases it before scroll geometry can be inspected.
+		const TSharedRef<SWidget> RenderWidget = Designer ? Designer->TakeWidget() : Widget->TakeWidget();
 		for (const FIntPoint Size : {FIntPoint(1280, 800), FIntPoint(800, 600)})
 		{
-			UTextureRenderTarget2D* Target = Renderer->DrawWidget(Widget->TakeWidget(), FVector2D(Size));
+			UTextureRenderTarget2D* Target = Renderer->DrawWidget(RenderWidget, FVector2D(Size));
+			// Offscreen DrawWidget paints a virtual window; it does not run the
+			// normal viewport tick that caches SScrollBox geometry and offsets.
+			if (Designer && DesignerScroll && DesignerScroll->GetCachedWidget().IsValid())
+			{
+				DesignerScroll->GetCachedWidget()->Tick(DesignerScroll->GetCachedGeometry(), FPlatformTime::Seconds(), 1.f / 60.f);
+				Renderer->DrawWidget(Target, RenderWidget, FVector2D(Size), 1.f / 60.f);
+			}
 			FlushRenderingCommands();
 			TArray<FColor> Pixels;
 			FReadSurfaceDataFlags Flags;
@@ -201,6 +260,19 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 				FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, Bytes);
 				const FString Filename = FPaths::ProjectSavedDir() / (Size.X == 1280 ? TEXT("InventoryPreview.png") : TEXT("InventoryPreviewSmall.png"));
 				TestTrue(TEXT("UMG image saved"), FFileHelper::SaveArrayToFile(Bytes, *Filename));
+			}
+			if (Designer && DesignerScroll && TestTrue(TEXT("Scroll Slate remains alive"), DesignerScroll->GetCachedWidget().IsValid()))
+			{
+				TestTrue(TEXT("Hidden bag rows overflow the three-row viewport"), DesignerScroll->GetScrollOffsetOfEnd() > 0);
+				const FVector2D HotbarPosition = Designer->HotbarHost->GetCachedGeometry().GetAbsolutePosition();
+				DesignerScroll->SetScrollOffset(10000);
+				DesignerScroll->GetCachedWidget()->Tick(DesignerScroll->GetCachedGeometry(), FPlatformTime::Seconds(), 1.f / 60.f);
+				Renderer->DrawWidget(Target, RenderWidget, FVector2D(Size), 1.f / 60.f);
+				FlushRenderingCommands();
+				TestTrue(TEXT("Hidden bag rows can be scrolled into view"), DesignerScroll->GetScrollOffset() > 0);
+				TestTrue(TEXT("Scrolling the bag keeps hotbar fixed"), HotbarPosition.Equals(
+					Designer->HotbarHost->GetCachedGeometry().GetAbsolutePosition(), 0.1));
+				DesignerScroll->SetScrollOffset(0);
 			}
 		}
 		BeginCleanup(Renderer);

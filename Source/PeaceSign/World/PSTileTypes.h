@@ -22,7 +22,8 @@ UENUM(BlueprintType)
 enum class EPSWorldObjectType : uint8
 {
 	None,
-	Stone
+	Stone,
+	Tree
 };
 
 UENUM(BlueprintType)
@@ -37,7 +38,8 @@ enum class EPSTileInteractionResult : uint8
 	Harvested,
 	CropRemoved,
 	InventoryFull,
-	GroundChanged
+	GroundChanged,
+	Watered
 };
 
 UENUM(BlueprintType)
@@ -146,12 +148,21 @@ struct FPSTileCell
 	// -1 denotes a legacy crop without a planting timestamp.
 	UPROPERTY(SaveGame)
 	int64 PlantedHalfHour = -1;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
+	bool bWatered = false;
+	UPROPERTY(SaveGame)
+	int64 LastFarmDawn = -1;
+	UPROPERTY(SaveGame)
+	uint8 DryDays = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame, meta = (ClampMin = "1", ClampMax = "5"))
 	uint8 GrowthStage = 1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	uint8 Variant = 0;
+	/** Render-only occupancy used to compose farm corners; never changes saved terrain. */
+	UPROPERTY(Transient)
+	uint16 FarmNeighborMask = 256;
 
 	/** Authored stamps keep their exact source piece instead of running auto-tiling. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
@@ -170,13 +181,15 @@ struct FPSTileStamp
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	FIntPoint Origin = FIntPoint::ZeroValue;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "11"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "1", ClampMax = "12"))
 	int32 Set = 1;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	bool bWater = false;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool bFarm = false;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (EditCondition = "Set == 6"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (EditCondition = "Set == 6 || (bFarm && Set == 2)"))
 	bool bVertical = false;
 };
 

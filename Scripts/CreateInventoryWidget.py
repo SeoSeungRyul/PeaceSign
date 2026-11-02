@@ -1,12 +1,12 @@
 import unreal
 
-path = '/Game/UI/WBP_Inventory'
+path = '/Game/UI/Inventory/WBP_Inventory'
 asset = unreal.load_asset(path)
 if not asset:
     factory = unreal.WidgetBlueprintFactory()
     factory.set_editor_property('parent_class', unreal.load_class(None, '/Script/PeaceSign.PSInventoryWidget'))
     asset = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
-        'WBP_Inventory', '/Game/UI', unreal.WidgetBlueprint, factory)
+        'WBP_Inventory', '/Game/UI/Inventory', unreal.WidgetBlueprint, factory)
     if not asset:
         raise RuntimeError('Could not create inventory widget')
 unreal.BlueprintEditorLibrary.compile_blueprint(asset)

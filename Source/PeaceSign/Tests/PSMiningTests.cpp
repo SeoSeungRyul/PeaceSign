@@ -145,7 +145,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Bare-hand hit removes ten health"), Grid->GetStoneHealth(StoneCell), 20);
 	if (UPSWorldSaveGame* PartialSave = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0)))
 	{
-		TestEqual(TEXT("Mining save uses the vein data version"), PartialSave->DataVersion, 4);
+		TestEqual(TEXT("Mining save includes gathering data version"), PartialSave->DataVersion, 6);
 		const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(StoneCell, Grid->ChunkSize);
 		const FPSChunkSaveData* PartialChunk = PartialSave->ModifiedChunks.FindByPredicate(
 			[ChunkCoordinate](const FPSChunkSaveData& Chunk) { return Chunk.Coordinate == ChunkCoordinate; });
@@ -296,7 +296,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	OreChunk.Cells[OreIndex].MineralType = EPSMineralType::Copper;
 	OreChunk.Cells[OreIndex].ObjectHealth = APSGridWorld::GetStoneMaxHealth(EPSMineralType::Copper);
 	Grid->RebuildChunk(StoneChunk);
-	Controller->SelectHotbarSlot(5);
+	Controller->SelectHotbarSlot(9);
 	const int32 CopperOreBeforeBareHands = CountCopperOre();
 	for (int32 Hit = 0; Hit < 4; ++Hit)
 		TestEqual(TEXT("Bare hands can damage a copper block"),

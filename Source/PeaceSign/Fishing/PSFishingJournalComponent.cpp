@@ -20,12 +20,13 @@ void UPSFishingJournalComponent::EndPlay(const EEndPlayReason::Type EndPlayReaso
 	Super::EndPlay(EndPlayReason);
 }
 
-bool UPSFishingJournalComponent::RecordCatch(const FName FishId, const int32 SizeCm, const int32 Quantity)
+bool UPSFishingJournalComponent::RecordCatch(const FName FishId, const int32 SizeCm, const int32 Quantity, const int32 SpeciesMaxSize)
 {
 	if (FishId.IsNone() || SizeCm <= 0 || Quantity <= 0) return false;
 	FPSFishJournalRecord& Record = Records.FindOrAdd(FishId);
 	Record.TimesCaught += Quantity;
 	Record.LargestSizeCm = FMath::Max(Record.LargestSizeCm, SizeCm);
+	Record.bMastered |= SpeciesMaxSize > 0 && SizeCm >= SpeciesMaxSize;
 	if (bAutoSave) SaveJournal();
 	OnJournalChanged.Broadcast(FishId);
 	return true;

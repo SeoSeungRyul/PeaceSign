@@ -23,7 +23,7 @@ bool FPSTileStampTest::RunTest(const FString& Parameters)
 	APSGridWorld* Grid = World->SpawnActor<APSGridWorld>();
 	Grid->SaveSlotName = TEXT("TileStampTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
 	for (int32 Family = 0; Family < 2; ++Family)
-		for (int32 Entry = 0; Entry < 12; ++Entry)
+		for (int32 Entry = 0; Entry < 13; ++Entry)
 		{
 			Grid->TileStamps.Reset();
 			Grid->LoadedChunks.Reset();
@@ -40,7 +40,7 @@ bool FPSTileStampTest::RunTest(const FString& Parameters)
 				{
 					const FIntPoint Cell = Stamp.Origin + FIntPoint(X, Y);
 					FPSTileCell Expected;
-					if (Stamp.Set == 11 && !((X == 1 && Y != 1) || (Y == 1 && X != 1)))
+					if (Stamp.Set >= 11 && !((X == 1 && Y != 1) || (Y == 1 && X != 1)))
 					{
 						Expected.Variant = 42;
 						TestFalse(TEXT("Sparse cross leaves empty positions untouched"), PSTileStamp::BuildCell(Stamp, Cell, Expected));
@@ -48,7 +48,7 @@ bool FPSTileStampTest::RunTest(const FString& Parameters)
 						continue;
 					}
 					TestTrue(TEXT("Source piece built"), PSTileStamp::BuildCell(Stamp, Cell, Expected));
-					const uint8 ExpectedVariant = Stamp.Set == 11 ? (Y == 0 ? 66 : Y == 2 ? 69 : X == 0 ? 67 : 68)
+					const uint8 ExpectedVariant = Stamp.Set >= 11 ? (Stamp.Set == 11 ? 66 : 70) + (Y == 0 ? 0 : Y == 2 ? 3 : X == 0 ? 1 : 2)
 						: Stamp.Set == 10 ? 64 + X
 						: Entry >= 7 ? 52 + (Entry - 7) * 4 + Y * 2 + X
 						: Entry < 5 ? Entry * 9 + Y * 3 + X + 1
@@ -64,11 +64,11 @@ bool FPSTileStampTest::RunTest(const FString& Parameters)
 					TestEqual(TEXT("Stamp contains no procedural stones"), Actual.ObjectType, EPSWorldObjectType::None);
 				}
 		}
-	FPSTileStamp Invalid; Invalid.Set = 12;
+	FPSTileStamp Invalid; Invalid.Set = 13;
 	FPSTileCell Unchanged; Unchanged.Variant = 42;
 	TestFalse(TEXT("Invalid set rejected"), PSTileStamp::BuildCell(Invalid, FIntPoint::ZeroValue, Unchanged));
 	Invalid.bWater = true;
-	TestFalse(TEXT("Water Set12 not available"), PSTileStamp::BuildCell(Invalid, FIntPoint::ZeroValue, Unchanged));
+	TestFalse(TEXT("Water Set13 remains excluded"), PSTileStamp::BuildCell(Invalid, FIntPoint::ZeroValue, Unchanged));
 	TestEqual(TEXT("Failed lookup does not touch output"), Unchanged.Variant, uint8(42));
 
 	// Overlap order is stable. Player modifications saved later take precedence.
@@ -130,12 +130,12 @@ bool FPSTileStampTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("Board draws exact source texture"), Material->K2_GetTextureParameterValue(TEXT("SpriteTexture")) == Expected);
 		}
 	}
-	TestEqual(TEXT("Board displays all 69 dirt and 69 water pieces exactly once"), Count, 138);
+	TestEqual(TEXT("Board displays dirt, water, 23 farm pieces and nine wet farm examples"), Count, 187);
 	Board->RefreshBoard();
 	Count = 0;
 	Board->GetComponents(Components);
 	for (auto* C : Components) Count += C->GetInstanceCount();
-	TestEqual(TEXT("Board refresh does not duplicate pieces"), Count, 138);
+	TestEqual(TEXT("Board refresh does not duplicate pieces"), Count, 187);
 	UGameplayStatics::DeleteGameInSlot(Grid->SaveSlotName, 0);
 	World->DestroyWorld(false);
 	return true;

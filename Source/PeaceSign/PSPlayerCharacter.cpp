@@ -98,6 +98,7 @@ void APSPlayerCharacter::BeginPlay()
 void APSPlayerCharacter::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (ActiveFishingCastFlipbook && bFishingAnimationThrown && !bMovementLocked && !GetSprite()->IsPlaying()) EndFishingCastAnimation();
 	if (bMovementLocked)
 	{
 		StatsComponent->SetMovementActive(false);
@@ -130,6 +131,59 @@ void APSPlayerCharacter::Tick(const float DeltaSeconds)
 	const FVector WorldDelta(MovementInput.Y, MovementInput.X, 0.0f);
 	AddActorWorldOffset(WorldDelta * CurrentMoveSpeed * DeltaSeconds, true);
 
+}
+
+void APSPlayerCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
+{
+	// Apply the pan to the view that the player camera manager actually renders.
+	// This does not depend on actor movement ticks or spring-arm socket refreshes.
+	if (Camera) Camera->GetCameraView(DeltaTime, OutResult);
+	else Super::CalcCamera(DeltaTime, OutResult);
+	UpdateFishingCamera(DeltaTime);
+	OutResult.Location += FishingCameraOffset;
+}
+
+void APSPlayerCharacter::UnPossessed()
+{
+	Super::UnPossessed();
+	FishingCameraOffset = FVector::ZeroVector;
+	FishingCameraBlendStart = FVector::ZeroVector;
+	FishingCameraBlendElapsed = 0;
+	bHasFishingCameraOffset = false;
+	bWasFishingCameraFocused = false;
+}
+
+void APSPlayerCharacter::UpdateFishingCamera(const float DeltaSeconds)
+{
+	const APSPlayerController* PlayerController = Cast<APSPlayerController>(GetController());
+	if (PlayerController && PlayerController->IsPaused()) return;
+	FVector FocusLocation;
+	const bool bFocus = PlayerController && PlayerController->GetFishingFocusLocation(FocusLocation);
+	if (!bFocus && !bHasFishingCameraOffset) return;
+	bHasFishingCameraOffset = true;
+	if (bFocus != bWasFishingCameraFocused)
+	{
+		FishingCameraBlendStart = FishingCameraOffset;
+		FishingCameraBlendElapsed = 0;
+		bWasFishingCameraFocused = bFocus;
+	}
+	FVector DesiredOffset = FVector::ZeroVector;
+	if (bFocus)
+	{
+		const FVector Delta = FocusLocation - GetActorLocation();
+		// Pan on the ground plane; preserve the authored camera height, angle and zoom.
+		DesiredOffset = FVector(Delta.X, Delta.Y, 0);
+	}
+	const float Duration = FMath::Max(0.f, FishingCameraBlendSeconds);
+	FishingCameraBlendElapsed += FMath::Max(0.f, DeltaSeconds);
+	const float Alpha = Duration > 0 ? FMath::Clamp(FishingCameraBlendElapsed / Duration, 0.f, 1.f) : 1.f;
+	const float SmoothAlpha = Alpha * Alpha * (3 - 2 * Alpha);
+	FishingCameraOffset = FMath::Lerp(FishingCameraBlendStart, DesiredOffset, SmoothAlpha);
+	if (!bFocus && Alpha >= 1)
+	{
+		FishingCameraOffset = FVector::ZeroVector;
+		bHasFishingCameraOffset = false;
+	}
 }
 
 void APSPlayerCharacter::StartRoll(const FVector2D& MovementInput)
@@ -313,6 +367,101 @@ void APSPlayerCharacter::SetMovementLocked(const bool bLocked)
 	RollTimeRemaining = 0.0f;
 	StatsComponent->SetMovementActive(false);
 	StatsComponent->SetActionActive(false);
+}
+
+float APSPlayerCharacter::BeginFishingCastPreparation(const FVector& WorldDirection)
+{
+	EndFishingCastAnimation();
+	const FVector2D Facing(WorldDirection.Y, WorldDirection.X);
+	if (!Facing.IsNearlyZero())
+	{
+		LastMovementInput = Facing.GetSafeNormal();
+		SetFacingFromInput(LastMovementInput);
+	}
+	if (!FishingCastFlipbook || FishingCastFlipbook->GetNumKeyFrames() < 2
+		|| !FMath::IsFinite(FishingCastFlipbook->GetFramesPerSecond())
+		|| FishingCastFlipbook->GetFramesPerSecond() <= 0) return 0;
+	ActiveFishingCastFlipbook = FishingCastFlipbook;
+	BeforeFishingFlipbook = GetSprite()->GetFlipbook();
+	bBeforeFishingLooping = GetSprite()->IsLooping();
+	bBeforeFishingPlaying = GetSprite()->IsPlaying();
+	BeforeFishingPosition = GetSprite()->GetPlaybackPosition();
+	FishingPreparationFrames = FMath::Max(1, ActiveFishingCastFlipbook->GetKeyFrameChecked(0).FrameRun)
+		+ FMath::Max(1, ActiveFishingCastFlipbook->GetKeyFrameChecked(1).FrameRun);
+	bFishingAnimationThrown = false;
+	GetSprite()->SetFlipbook(ActiveFishingCastFlipbook);
+	GetSprite()->SetLooping(false);
+	GetSprite()->Stop();
+	GetSprite()->SetPlaybackPositionInFrames(0, false);
+	return FishingPreparationFrames / ActiveFishingCastFlipbook->GetFramesPerSecond();
+}
+
+void APSPlayerCharacter::UpdateFishingCastPreparation(const float ElapsedSeconds)
+{
+	if (!ActiveFishingCastFlipbook || bFishingAnimationThrown || GetSprite()->GetFlipbook() != ActiveFishingCastFlipbook) return;
+	const int32 Frame = FMath::FloorToInt(FMath::Max(0.f, ElapsedSeconds) * ActiveFishingCastFlipbook->GetFramesPerSecond());
+	GetSprite()->SetPlaybackPositionInFrames(FMath::Clamp(Frame, 0, FishingPreparationFrames - 1), false);
+}
+
+void APSPlayerCharacter::PlayFishingCastThrow()
+{
+	if (!ActiveFishingCastFlipbook || bFishingAnimationThrown || GetSprite()->GetFlipbook() != ActiveFishingCastFlipbook) return;
+	bFishingAnimationThrown = true;
+	if (ActiveFishingCastFlipbook->GetNumFrames() > FishingPreparationFrames)
+	{
+		GetSprite()->SetPlaybackPositionInFrames(FishingPreparationFrames, false);
+		GetSprite()->Play();
+	}
+}
+
+void APSPlayerCharacter::EndFishingCastAnimation()
+{
+	if (!ActiveFishingCastFlipbook) return;
+	// Blueprint success/failure animations may have already replaced the casting clip.
+	if (GetSprite()->GetFlipbook() == ActiveFishingCastFlipbook)
+	{
+		GetSprite()->SetFlipbook(BeforeFishingFlipbook);
+		GetSprite()->SetLooping(bBeforeFishingLooping);
+		GetSprite()->SetPlaybackPosition(BeforeFishingPosition, false);
+		if (bBeforeFishingPlaying) GetSprite()->Play();
+		else GetSprite()->Stop();
+	}
+	ActiveFishingCastFlipbook = nullptr;
+	BeforeFishingFlipbook = nullptr;
+	FishingPreparationFrames = 0;
+	bFishingAnimationThrown = false;
+}
+
+float APSPlayerCharacter::PlayFishingStateAnimation(const EPSFishingState State)
+{
+	UPaperFlipbook* Clip = State == EPSFishingState::Success ? FishingSuccessFlipbook
+		: State == EPSFishingState::Failure ? FishingFailureFlipbook
+		: State == EPSFishingState::Retrieving ? FishingRetrieveFlipbook : FishingPullFlipbook;
+	EndFishingCastAnimation();
+	if (!Clip || Clip->GetTotalDuration() <= 0) return 0;
+	BeforeFishingFlipbook = GetSprite()->GetFlipbook();
+	bBeforeFishingLooping = GetSprite()->IsLooping();
+	bBeforeFishingPlaying = GetSprite()->IsPlaying();
+	BeforeFishingPosition = GetSprite()->GetPlaybackPosition();
+	ActiveFishingCastFlipbook = Clip;
+	bFishingAnimationThrown = true;
+	GetSprite()->SetFlipbook(Clip);
+	GetSprite()->SetLooping(State == EPSFishingState::Minigame);
+	GetSprite()->PlayFromStart();
+	return Clip->GetTotalDuration();
+}
+
+bool APSPlayerCharacter::IsFishingStateAnimationPlaying() const
+{
+	return ActiveFishingCastFlipbook && GetSprite()->GetFlipbook() == ActiveFishingCastFlipbook && GetSprite()->IsPlaying();
+}
+
+FIntPoint APSPlayerCharacter::GetFacingCellOffset() const
+{
+	// Match sprite facing, including the vertical tie-break used for diagonal movement.
+	if (FMath::Abs(LastMovementInput.X) > FMath::Abs(LastMovementInput.Y))
+		return FIntPoint(0, LastMovementInput.X > 0 ? 1 : -1);
+	return FIntPoint(LastMovementInput.Y > 0 ? 1 : -1, 0);
 }
 
 void APSPlayerCharacter::SetFacingFromInput(const FVector2D& MovementInput)

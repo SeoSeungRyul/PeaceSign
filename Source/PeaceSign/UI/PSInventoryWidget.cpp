@@ -9,16 +9,26 @@
 #include "Components/CanvasPanelSlot.h"
 #include "Components/HorizontalBox.h"
 #include "Components/HorizontalBoxSlot.h"
+#include "Components/Image.h"
+#include "Components/Overlay.h"
+#include "Components/OverlaySlot.h"
+#include "Components/ScrollBox.h"
+#include "Components/ScrollBoxSlot.h"
 #include "Components/ScaleBox.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
 #include "Components/UniformGridPanel.h"
+#include "Components/UniformGridSlot.h"
 #include "Components/VerticalBox.h"
 #include "Components/VerticalBoxSlot.h"
 #include "Engine/Texture2D.h"
 #include "InputCoreTypes.h"
 #include "Rendering/DrawElements.h"
 #include "Styling/CoreStyle.h"
+#if WITH_EDITOR
+#include "WidgetBlueprint.h"
+#include "Kismet2/BlueprintEditorUtils.h"
+#endif
 
 namespace
 {
@@ -27,12 +37,69 @@ namespace
 	{
 		auto* Result = Tree->ConstructWidget<UTextBlock>();
 		Result->SetText(FText::FromString(Text));
-		FSlateFontInfo Font = Result->GetFont();
+		FSlateFontInfo Font = UPSUIWidget::WithProjectFont(Result->GetFont());
 		Font.Size = Size;
 		Result->SetFont(Font);
 		Result->SetColorAndOpacity(Color);
 		return Result;
 	}
+
+	// Nested UserWidgets own separate trees. Is Variable is not required for name lookup.
+	void CollectDesignerWidgets(UUserWidget* Owner, TArray<UWidget*>& Out)
+	{
+		if (!Owner || !Owner->WidgetTree) return;
+		Owner->WidgetTree->ForEachWidget([&Out](UWidget* Widget)
+		{
+			Out.Add(Widget);
+			if (UUserWidget* Child = Cast<UUserWidget>(Widget)) CollectDesignerWidgets(Child, Out);
+		});
+	}
+
+	UOverlay* WrapDesignerImage(UWidgetTree* Tree, UImage* Image)
+	{
+		UPanelWidget* Parent = Image ? Image->GetParent() : nullptr;
+		if (!Parent) return nullptr;
+		UOverlay* Overlay = Tree->ConstructWidget<UOverlay>();
+		if (!Parent->ReplaceChildAt(Parent->GetChildIndex(Image), Overlay)) return nullptr;
+		Image->Slot = nullptr;
+		Image->SetVisibility(ESlateVisibility::HitTestInvisible);
+		UOverlaySlot* Art = Overlay->AddChildToOverlay(Image);
+		Art->SetHorizontalAlignment(HAlign_Fill);
+		Art->SetVerticalAlignment(VAlign_Fill);
+		return Overlay;
+	}
+
+	bool IsBookCover(const UImage* Image)
+	{
+		const UObject* Resource = Image ? Image->GetBrush().GetResourceObject() : nullptr;
+		return Resource && Resource->GetFName() == TEXT("Inven_Background");
+	}
+
+#if WITH_EDITOR
+	bool AttachDesignerBookTabs(UWidgetTree* Tree)
+	{
+		UWidget* Navigation = Tree->FindWidget(TEXT("Button_Information"));
+		UImage* Cover = nullptr;
+		Tree->ForEachWidget([&Cover](UWidget* Widget) { if (auto* Image = Cast<UImage>(Widget); IsBookCover(Image)) Cover = Image; });
+		if (!Navigation || !Cover) return false;
+		const auto CanvasBranch = [](UWidget* Widget)
+		{
+			while (Widget && !Cast<UCanvasPanelSlot>(Widget->Slot)) Widget = Widget->GetParent();
+			return Widget;
+		};
+		Navigation = CanvasBranch(Navigation);
+		UWidget* CoverBranch = CanvasBranch(Cover);
+		if (!Navigation || !CoverBranch || Navigation == CoverBranch) return false;
+		auto* NavigationSlot = CastChecked<UCanvasPanelSlot>(Navigation->Slot);
+		auto* CoverSlot = CastChecked<UCanvasPanelSlot>(CoverBranch->Slot);
+		Navigation->Modify(); NavigationSlot->Modify(); Cover->Modify();
+		NavigationSlot->SetZOrder(CoverSlot->GetZOrder() - 1);
+		FVector2D Translation = Navigation->GetRenderTransform().Translation; Translation.Y = 0;
+		Navigation->SetRenderTranslation(Translation);
+		Cover->SetVisibility(ESlateVisibility::Visible);
+		return true;
+	}
+#endif
 }
 
 UPSInventoryWidget::UPSInventoryWidget(const FObjectInitializer& ObjectInitializer) : Super(ObjectInitializer)
@@ -49,6 +116,13 @@ UPSInventoryWidget::UPSInventoryWidget(const FObjectInitializer& ObjectInitializ
 void UPSInventoryWidget::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
+	if (WidgetTree->RootWidget)
+	{
+		// Never overwrite an artist-authored tree, even when a binding is missing.
+		bDesignerLayout = true;
+		if (!HotbarHost) ConnectDesignerLayout();
+		return;
+	}
 	auto* Canvas = WidgetTree->ConstructWidget<UCanvasPanel>();
 	WidgetTree->RootWidget = Canvas;
 	auto* Shade = WidgetTree->ConstructWidget<UBorder>();
@@ -140,8 +214,141 @@ void UPSInventoryWidget::NativeOnInitialized()
 void UPSInventoryWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	if (bDesignerLayout && !HotbarHost) ConnectDesignerLayout();
 	if (InventoryComponent) InventoryComponent->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshInventory);
 	RefreshInventory();
+}
+
+bool UPSInventoryWidget::ConnectDesignerLayout()
+{
+	TArray<UWidget*> Widgets;
+	CollectDesignerWidgets(this, Widgets);
+	UUniformGridPanel* Grid = nullptr;
+	UImage* HotbarArt = nullptr;
+	for (UWidget* Widget : Widgets)
+	{
+		if (Widget->GetFName() == TEXT("BagGrid")) Grid = Cast<UUniformGridPanel>(Widget);
+		if (Widget->GetFName() == TEXT("MiniLine1")) HotbarArt = Cast<UImage>(Widget);
+		if (UImage* Image = Cast<UImage>(Widget)) Image->SetVisibility(IsBookCover(Image) ? ESlateVisibility::Visible : ESlateVisibility::HitTestInvisible);
+	}
+	if (!Grid || !HotbarArt)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Inventory designer requires BagGrid and MiniLine1 in its nested widget trees."));
+		return false;
+	}
+	TArray<UImage*> Rows;
+	for (UWidget* Child : Grid->GetAllChildren())
+		if (UImage* Image = Cast<UImage>(Child)) Rows.Add(Image);
+	Rows.Sort([](const UImage& A, const UImage& B)
+	{
+		return CastChecked<UUniformGridSlot>(A.Slot)->GetRow() < CastChecked<UUniformGridSlot>(B.Slot)->GetRow();
+	});
+	if (Rows.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Inventory BagGrid requires at least one row artwork image."));
+		return false;
+	}
+	// Preserve both the authored row height/padding and all existing save slots.
+	const int32 RowCount = FMath::DivideAndRoundUp(UPSInventoryComponent::MaxBagSlotCount, 10);
+	UImage* Template = Rows.Last();
+	while (Rows.Num() < RowCount)
+	{
+		UImage* Art = WidgetTree->ConstructWidget<UImage>();
+		Art->SetBrush(Template->GetBrush());
+		Grid->AddChildToUniformGrid(Art, Rows.Num(), 0);
+		Rows.Add(Art);
+	}
+	if (UScrollBoxSlot* GridSlot = Cast<UScrollBoxSlot>(Grid->Slot)) GridSlot->SetVerticalAlignment(VAlign_Top);
+	for (int32 Row = 0; Row < RowCount; ++Row)
+	{
+		UOverlay* Overlay = WrapDesignerImage(WidgetTree, Rows[Row]);
+		if (!Overlay) continue;
+		UHorizontalBox* Cells = WidgetTree->ConstructWidget<UHorizontalBox>();
+		UOverlaySlot* CellsSlot = Overlay->AddChildToOverlay(Cells);
+		CellsSlot->SetHorizontalAlignment(HAlign_Fill);
+		CellsSlot->SetVerticalAlignment(VAlign_Fill);
+		for (int32 Column = 0; Column < 10; ++Column)
+		{
+			UPSInventorySlotWidget* Cell = CreateWidget<UPSInventorySlotWidget>(this);
+			Cell->Setup(this, Row * 10 + Column, false);
+			Cells->AddChildToHorizontalBox(Cell)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		}
+	}
+	UOverlay* HotbarOverlay = WrapDesignerImage(WidgetTree, HotbarArt);
+	if (!HotbarOverlay) return false;
+	HotbarHost = WidgetTree->ConstructWidget<USizeBox>();
+	UOverlaySlot* HostSlot = HotbarOverlay->AddChildToOverlay(HotbarHost);
+	HostSlot->SetHorizontalAlignment(HAlign_Fill);
+	HostSlot->SetVerticalAlignment(VAlign_Fill);
+	// Preserve the artist's existing navigation layout, adding interaction over each image.
+	for (UWidget* Widget : Widgets)
+	{
+		UImage* Art = Cast<UImage>(Widget);
+		if (!Art || (Art->GetFName() != TEXT("Button_Information") && Art->GetFName() != TEXT("Button_Encyclopedia") && Art->GetFName() != TEXT("Button_Setting"))) continue;
+		UOverlay* Tab = WrapDesignerImage(WidgetTree, Art);
+		if (!Tab) continue;
+		// Continue the empty lower edge beneath the book without lowering or stretching its icon.
+		auto* Tail = WidgetTree->ConstructWidget<UImage>(); FSlateBrush TailBrush = Art->GetBrush();
+		TailBrush.SetUVRegion(FBox2f(FVector2f(0, .8f), FVector2f(1, 1)));
+		TailBrush.ImageSize.Y = 64; Tail->SetBrush(TailBrush); Tail->SetVisibility(ESlateVisibility::HitTestInvisible);
+		auto* TailSlot = Tab->AddChildToOverlay(Tail);
+		TailSlot->SetHorizontalAlignment(HAlign_Fill); TailSlot->SetVerticalAlignment(VAlign_Bottom);
+		TailSlot->SetPadding(FMargin(0, 0, 0, -40));
+		auto* Button = WidgetTree->ConstructWidget<UButton>();
+		FButtonStyle Style; Style.Normal.DrawAs = ESlateBrushDrawType::NoDrawType;
+		Style.Hovered = Style.Normal; Style.Pressed = Style.Normal; Style.Disabled = Style.Normal;
+		Style.NormalPadding = FMargin(0); Style.PressedPadding = FMargin(0); Button->SetStyle(Style);
+		UOverlaySlot* Hit = Tab->AddChildToOverlay(Button);
+		Hit->SetHorizontalAlignment(HAlign_Fill); Hit->SetVerticalAlignment(VAlign_Fill);
+		Hit->SetPadding(FMargin(0, 0, 0, -40));
+		if (Art->GetFName() == TEXT("Button_Information")) Tab->SetRenderTranslation(FVector2D(0, -24));
+		else if (Art->GetFName() == TEXT("Button_Encyclopedia")) Button->OnClicked.AddUniqueDynamic(this, &ThisClass::OpenJournal);
+		else Button->SetToolTipText(FText::FromString(TEXT("스킬 (준비 중)")));
+	}
+	// Evaluate all authored anchors against the same reference canvas, then scale the
+	// complete book. Otherwise fixed child coordinates escape a smaller viewport.
+	UWidget* AuthoredRoot = WidgetTree->RootWidget;
+	UCanvasPanel* Viewport = WidgetTree->ConstructWidget<UCanvasPanel>();
+	UScaleBox* Fit = WidgetTree->ConstructWidget<UScaleBox>();
+	Fit->SetStretch(EStretch::ScaleToFit);
+	Fit->SetStretchDirection(EStretchDirection::Both);
+	UCanvasPanelSlot* FitSlot = Viewport->AddChildToCanvas(Fit);
+	FitSlot->SetAnchors(FAnchors(0, 0, 1, 1));
+	FitSlot->SetOffsets(FMargin(16));
+	USizeBox* Reference = WidgetTree->ConstructWidget<USizeBox>();
+	Reference->SetWidthOverride(FMath::Max(1.0, DesignerReferenceSize.X));
+	Reference->SetHeightOverride(FMath::Max(1.0, DesignerReferenceSize.Y));
+	Reference->SetContent(AuthoredRoot);
+	Fit->SetContent(Reference);
+	WidgetTree->RootWidget = Viewport;
+	return true;
+}
+
+void UPSInventoryWidget::OpenJournal()
+{
+	if (auto* Controller = Cast<APSPlayerController>(GetOwningPlayer())) Controller->ToggleFishingJournal();
+}
+
+bool UPSInventoryWidget::ApplyBookTabArtwork(UObject* Asset)
+{
+#if WITH_EDITOR
+	auto* Blueprint = Cast<UWidgetBlueprint>(Asset);
+	if (!Blueprint || !Blueprint->WidgetTree) return false;
+	const TCHAR* Names[] = {TEXT("Button_Information"), TEXT("Button_Encyclopedia"), TEXT("Button_Setting")};
+	const TCHAR* Images[] = {TEXT("Inven"), TEXT("Encyclopedia"), TEXT("Skill")};
+	for (int32 Index = 0; Index < 3; ++Index)
+	{
+		auto* Art = Cast<UImage>(Blueprint->WidgetTree->FindWidget(Names[Index]));
+		const FString Path = FString::Printf(TEXT("/Game/UI/Book/Book_Index/Book_Index_%s"), Images[Index]);
+		auto* Texture = LoadObject<UTexture2D>(nullptr, *Path);
+		if (!Art || !Texture) return false;
+		Art->Modify(); Art->SetBrushFromTexture(Texture);
+	}
+	if (!AttachDesignerBookTabs(Blueprint->WidgetTree)) return false;
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint); return true;
+#else
+	return false;
+#endif
 }
 
 void UPSInventoryWidget::NativeDestruct()
@@ -181,7 +388,7 @@ void UPSInventoryWidget::SelectItem(int32 Index)
 {
 	if (!IsUnlocked(Index)) return;
 	SelectedIndex = Index;
-	if (!DetailName) return;
+	if (!DetailName || !DetailCount || !DetailDescription || !CapacityLabel) return;
 	const auto* Item = GetItem(Index);
 	const FPSItemDefinition& Definition = Item ? PSItems::GetDefinition(*Item) : PSItems::GetDefinition(EPSItemType::None);
 	DetailName->SetText(Item ? GetItemDisplayName(*Item) : Definition.Name);
@@ -212,24 +419,37 @@ UTexture2D* UPSInventoryWidget::GetItemIcon(const FPSItemStack& Item) const
 {
 	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
 	if (Controller)
-		if (UTexture2D* FishIcon = Controller->GetItemIcon(Item)) return FishIcon;
+		if (UTexture2D* ItemIcon = Controller->GetItemIcon(Item)) return ItemIcon;
 	const TObjectPtr<UTexture2D>* IconTexture = ItemIcons.Find(Item.ItemType);
 	return IconTexture ? IconTexture->Get() : nullptr;
 }
 
 void UPSInventoryWidget::AttachHotbar(UPSHotbarWidget* InHotbar)
 {
+	if (bDesignerLayout && !HotbarHost) ConnectDesignerLayout();
 	if (!HotbarHost || !InHotbar || HostedHotbar == InHotbar) return;
 	if (HostedHotbar) DetachHotbar();
 	InHotbar->RemoveFromParent();
-	HotbarHost->SetContent(InHotbar);
+	if (bDesignerLayout)
+	{
+		// Use the same physical hotbar and interaction code over the artist's row image.
+		UHorizontalBox* Cells = WidgetTree->ConstructWidget<UHorizontalBox>();
+		HotbarHost->SetContent(Cells);
+		for (int32 Index = 0; Index < UPSInventoryComponent::HotbarSlotCount; ++Index)
+		{
+			UPSHotbarSlotWidget* Cell = CreateWidget<UPSHotbarSlotWidget>(this);
+			Cell->Setup(InHotbar, Index, false);
+			Cells->AddChildToHorizontalBox(Cell)->SetSize(FSlateChildSize(ESlateSizeRule::Fill));
+		}
+	}
+	else HotbarHost->SetContent(InHotbar);
 	HostedHotbar = InHotbar;
 }
 
 UPSHotbarWidget* UPSInventoryWidget::DetachHotbar()
 {
 	UPSHotbarWidget* Result = HostedHotbar;
-	if (HotbarHost && Result && Result->GetParent() == HotbarHost) HotbarHost->ClearChildren();
+	if (HotbarHost && Result) HotbarHost->ClearChildren();
 	HostedHotbar = nullptr;
 	return Result;
 }
@@ -255,10 +475,11 @@ FReply UPSInventoryWidget::NativeOnPreviewKeyDown(const FGeometry& Geometry, con
 	return Super::NativeOnPreviewKeyDown(Geometry, Event);
 }
 
-void UPSInventorySlotWidget::Setup(UPSInventoryWidget* InInventory, int32 InIndex)
+void UPSInventorySlotWidget::Setup(UPSInventoryWidget* InInventory, int32 InIndex, bool bInDrawBackground)
 {
 	Inventory = InInventory;
 	Index = InIndex;
+	bDrawBackground = bInDrawBackground;
 	SetVisibility(ESlateVisibility::Visible);
 	ForceVolatile(true);
 }
@@ -277,14 +498,24 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 	};
 	const bool Unlocked = Inventory->IsUnlocked(Index);
 	const bool Selected = Index == Inventory->GetSelectedIndex();
-	Rect(0, 0, 64, 64, Hex(TEXT("1C1713")));
+	if (bDrawBackground) Rect(0, 0, 64, 64, Hex(TEXT("1C1713")));
 	const FSlateBrush& Brush = Selected ? Inventory->SelectedSlotBrush : IsHovered() && Unlocked ? Inventory->HoverSlotBrush : Inventory->SlotBrush;
-	FSlateDrawElement::MakeBox(Elements, ++Layer, Geometry.ToPaintGeometry(FVector2D(60, 60) * Scale, FSlateLayoutTransform(FVector2D(2, 2) * Scale)),
-		&Brush, ESlateDrawEffect::None, Unlocked ? Brush.GetTint(Style) : Hex(TEXT("494035")));
-	if (!Brush.GetResourceObject() || !Unlocked)
+	if (bDrawBackground)
 	{
-		Rect(5, 5, 54, 54, Unlocked ? Hex(IsHovered() ? TEXT("C79559") : TEXT("B88951")) : Hex(TEXT("363129")));
-		Rect(5, 5, 54, 3, Unlocked ? Hex(TEXT("8C613B")) : Hex(TEXT("2C2822")));
+		FSlateDrawElement::MakeBox(Elements, ++Layer, Geometry.ToPaintGeometry(FVector2D(60, 60) * Scale, FSlateLayoutTransform(FVector2D(2, 2) * Scale)),
+			&Brush, ESlateDrawEffect::None, Unlocked ? Brush.GetTint(Style) : Hex(TEXT("494035")));
+		if (!Brush.GetResourceObject() || !Unlocked)
+		{
+			Rect(5, 5, 54, 54, Unlocked ? Hex(IsHovered() ? TEXT("C79559") : TEXT("B88951")) : Hex(TEXT("363129")));
+			Rect(5, 5, 54, 3, Unlocked ? Hex(TEXT("8C613B")) : Hex(TEXT("2C2822")));
+		}
+	}
+	else if (!Unlocked) Rect(2, 2, 60, 60, FLinearColor(0.12f, 0.09f, 0.06f, 0.45f));
+	else if (Selected || IsHovered())
+	{
+		const FLinearColor Highlight(1, 0.8f, 0.3f, 0.8f);
+		Rect(2, 2, 60, 2, Highlight);
+		Rect(2, 60, 60, 2, Highlight);
 	}
 	if (!Unlocked)
 	{
@@ -309,6 +540,8 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 		const FLinearColor C = Definition.Color;
 		switch (Definition.PlaceholderIcon)
 		{
+		case 9: Rect(29, 18, 6, 36, C); Rect(16, 16, 27, 14, C); break;
+		case 8: Rect(18, 27, 25, 20, C); Rect(23, 19, 16, 5, C); Rect(39, 28, 12, 5, C); Rect(49, 32, 4, 8, C); break;
 		case 0: Rect(29, 16, 5, 34, Hex(TEXT("735037"))); Rect(17, 14, 29, 8, C); Rect(16, 20, 9, 8, C); break;
 		case 1: Rect(20, 24, 24, 23, Hex(TEXT("E5CE95"))); Rect(24, 20, 16, 5, Hex(TEXT("765A36"))); Rect(30, 28, 4, 13, C); Rect(23, 27, 8, 5, C); Rect(33, 24, 7, 6, C); break;
 		case 2: Rect(24, 25, 19, 17, C); Rect(28, 42, 11, 6, C); Rect(29, 17, 4, 10, Hex(TEXT("63884D"))); Rect(34, 16, 8, 5, Hex(TEXT("86A95E"))); break;
@@ -336,7 +569,7 @@ int32 UPSInventorySlotWidget::NativePaint(const FPaintArgs& Args, const FGeometr
 		Rect(X - 3, 44, Count.Len() * 8 + 5, 16, FLinearColor(0.045f, 0.032f, 0.02f, 0.85f));
 		FSlateDrawElement::MakeText(Elements, ++Layer,
 			Geometry.ToPaintGeometry(FVector2D(50, 18) * Scale, FSlateLayoutTransform(FVector2D(X, 44) * Scale)),
-			Count, FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, Hex(TEXT("FFF0D1")));
+			Count, MakeProjectFont(11), ESlateDrawEffect::None, Hex(TEXT("FFF0D1")));
 	}
 	return Layer;
 }
@@ -387,7 +620,7 @@ void UPSInventorySlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const
 	if (Inventory)
 	{
 		const auto* Item = Inventory->GetItem(Index);
-		SetToolTipText(Item ? Inventory->GetItemDisplayName(*Item) : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
+		SetProjectToolTipText(Item ? Inventory->GetItemDisplayName(*Item) : FText::FromString(Inventory->IsUnlocked(Index) ? TEXT("빈 슬롯") : TEXT("가방 확장이 필요합니다")));
 	}
 }
 

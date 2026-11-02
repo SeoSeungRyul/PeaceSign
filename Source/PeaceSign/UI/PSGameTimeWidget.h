@@ -1,14 +1,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "PSUIWidget.h"
 #include "PSGameTimeWidget.generated.h"
 
 class UTextBlock;
 class UPSGameTimeSubsystem;
 
 UCLASS()
-class PEACESIGN_API UPSGameTimeWidget : public UUserWidget
+class PEACESIGN_API UPSGameTimeWidget : public UPSUIWidget
 {
 	GENERATED_BODY()
 protected:

@@ -82,7 +82,11 @@ namespace
 		{267, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_T.Dirt_Set11_T")},
 		{269, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_L.Dirt_Set11_L")},
 		{263, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_R.Dirt_Set11_R")},
-		{270, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_B.Dirt_Set11_B")}
+		{270, TEXT("/Game/Art/Tiles/Dirt/Set11/Dirt_Set11_B.Dirt_Set11_B")},
+		{463, TEXT("/Game/Art/Tiles/Dirt/Set12/Dirt_Set12_T.Dirt_Set12_T")},
+		{367, TEXT("/Game/Art/Tiles/Dirt/Set12/Dirt_Set12_L.Dirt_Set12_L")},
+		{415, TEXT("/Game/Art/Tiles/Dirt/Set12/Dirt_Set12_R.Dirt_Set12_R")},
+		{319, TEXT("/Game/Art/Tiles/Dirt/Set12/Dirt_Set12_B.Dirt_Set12_B")}
 	};
 	static_assert(UE_ARRAY_COUNT(DefaultRules) == PSDirtAutoTile::VariantCount);
 

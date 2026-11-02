@@ -45,6 +45,12 @@
 SourceArt/**/*.png
 SourceArt/**/*.tga
 
+# Editable gathering icon inputs used by Scripts/ImportGatheringIcons.py
+!SourceArt/Gathering/**/*.png
+
+# Local automation logs, test saves, backups and build caches
+.codex-tmp/
+
 # Binary Files
 Binaries/*
 Plugins/**/Binaries/*

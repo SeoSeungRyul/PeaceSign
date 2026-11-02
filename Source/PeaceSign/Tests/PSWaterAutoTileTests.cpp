@@ -31,8 +31,10 @@ bool FPSWaterAutoTileTest::RunTest(const FString& Parameters)
 	TMap<uint8, FPixels> Pixels;
 	for (uint8 V = 1; V <= PSWaterAutoTile::VariantCount; ++V)
 	{
-		UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, PSWaterAutoTile::GetVariantTexturePath(V));
-		TestNotNull(TEXT("All 69 canonical water assets resolve"), Texture);
+		const TCHAR* Path = PSWaterAutoTile::GetVariantTexturePath(V);
+		TestFalse(TEXT("Set13 alternative water artwork stays excluded"), FString(Path).Contains(TEXT("/Set13/")));
+		UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, Path);
+		TestNotNull(TEXT("All 73 canonical water assets resolve"), Texture);
 		if (!Texture) continue;
 		TestEqual(TEXT("Water tile width"), Texture->Source.GetSizeX(), int64(144));
 		TestEqual(TEXT("Water tile height"), Texture->Source.GetSizeY(), int64(144));
@@ -43,7 +45,7 @@ bool FPSWaterAutoTileTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("Water source pixels readable"), Texture->Source.GetMipData(P.Data, 0));
 	}
 	TestNull(TEXT("Invalid water variant has no asset"), PSWaterAutoTile::GetVariantTexturePath(0));
-	const uint16 AddedMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270};
+	const uint16 AddedMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270, 463, 367, 415, 319};
 	const FIntPoint SamplePoints[] = {{72,0}, {143,72}, {72,143}, {0,72},
 		{0,0}, {143,0}, {143,143}, {0,143}, {72,72}};
 	for (int32 I = 0; I < UE_ARRAY_COUNT(AddedMasks); ++I)

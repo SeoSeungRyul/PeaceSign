@@ -11,6 +11,7 @@
 class APSTileChunkActor;
 class UPSGameTimeSubsystem;
 class UPSDirtAutoTileSet;
+class UPSGatheringWorldComponent;
 
 UCLASS()
 class PEACESIGN_API APSGridWorld : public AActor
@@ -20,6 +21,11 @@ class PEACESIGN_API APSGridWorld : public AActor
 public:
 	APSGridWorld();
 	static constexpr int32 DefaultStoneHealth = 30;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Gathering")
+	TObjectPtr<UPSGatheringWorldComponent> Gathering;
+	bool CanPlaceGatheringTree(FIntPoint Cell) const;
+	int32 GetGatheringSeed() const { return WorldSeed; }
+	void SaveGatheringState() const { SaveWorld(); }
 
 	virtual void Tick(float DeltaSeconds) override;
 
@@ -70,6 +76,8 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult TillCell(FIntPoint Cell);
+	UFUNCTION(BlueprintPure, Category = "Farming") bool CanTillCell(FIntPoint Cell) const;
+	UFUNCTION(BlueprintPure, Category = "Farming") bool CanWaterCell(FIntPoint Cell) const;
 
 	/** Toggle unoccupied grass/dirt and refresh neighboring terrain transitions. */
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
@@ -77,6 +85,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult PlantSeed(FIntPoint Cell, int32 CropId = 0);
+	UFUNCTION(BlueprintCallable, Category = "Farming")
+	EPSTileInteractionResult WaterCell(FIntPoint Cell);
+	UFUNCTION(BlueprintPure, Category = "Farming")
+	bool IsCellWatered(FIntPoint Cell) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult HarvestCrop(FIntPoint Cell);
@@ -132,6 +144,12 @@ protected:
 	/** 이 Grid World의 물 타일에 적용할 낚시 장소 ID. 현재 절차 생성 물은 호수다. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Fishing")
 	EPSFishingLocation FishingLocation = EPSFishingLocation::Lake;
+	/** Temporary authored fishing area; enabled only on the development map. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Fishing")
+	bool bEnableFishingTestPond = false;
+	/** Lowest X/Y water cell. The pond is 8x8 with a central 2x2 grass island. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Fishing", meta = (EditCondition = "bEnableFishingTestPond"))
+	FIntPoint FishingTestPondOrigin = FIntPoint(2, -4);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid World|Save")
 	FString SaveSlotName = TEXT("PeaceSignWorld");
@@ -162,12 +180,20 @@ protected:
 #endif
 
 private:
+	friend class FPSGatheringTest;
+	friend class FPSGameDataTablesTest;
+	friend class FPSGatheringInventoryTest;
 	friend class FPSDirtAutoTileTest;
 	friend class FPSTileStampTest;
 	friend class FPSShovelTest;
 	friend class FPSWaterAutoTileTest;
 	friend class FPSCropGrowthTest;
+	friend class FPSFarmVisualTest;
+	friend class FPSFarmToolActionTest;
+	friend class FPSChargedHoeTest;
+	friend class FPSSecondHoeTest;
 	friend class FPSFishingTest;
+	friend class FPSFishingOct26Test;
 	friend class FPSFarmingInventoryTest;
 	friend class FPSMiningTest;
 	friend class FPSOreVeinTest;
@@ -179,6 +205,8 @@ private:
 	bool IsDirtPatchCell(FIntPoint Cell) const;
 	bool IsRawDirtPatchCell(FIntPoint Cell) const;
 	bool BuildStampedCell(FIntPoint Cell, FPSTileCell& OutCell) const;
+	bool BuildFishingTestPondCell(FIntPoint Cell, FPSTileCell& OutCell) const;
+	void ApplyFishingTestPond();
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();
 	int64 GetGrowthHalfHour() const;

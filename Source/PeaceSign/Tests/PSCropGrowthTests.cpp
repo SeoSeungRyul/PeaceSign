@@ -3,141 +3,118 @@
 #include "../World/PSGridWorld.h"
 #include "../World/PSWorldSaveGame.h"
 #include "../World/PSTileChunkActor.h"
-#include "../World/PSCropGrowth.h"
 #include "../Time/PSGameTimeSubsystem.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
-#include "UObject/UnrealType.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FPSCropGrowthTest, "PeaceSign.Farming.Growth", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 bool FPSCropGrowthTest::RunTest(const FString& Parameters)
 {
-	const UWorld::InitializationValues Init = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
+	const auto Init = UWorld::InitializationValues().AllowAudioPlayback(false).CreatePhysicsScene(false).CreateNavigation(false).CreateAISystem(false);
 	UWorld* World = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
 	World->InitializeActorsForPlay(FURL());
 	UPSGameTimeSubsystem* Clock = World->GetSubsystem<UPSGameTimeSubsystem>();
-	if (!TestNotNull(TEXT("Clock subsystem exists"), Clock)) { World->DestroyWorld(false); return false; }
-	APSGridWorld* Grid = World->SpawnActor<APSGridWorld>();
-	const FString Slot = TEXT("GrowthTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
-	Grid->SaveSlotName = Slot;
+	if (!TestNotNull(TEXT("Clock exists"), Clock)) { World->DestroyWorld(false); return false; }
+	Clock->RestoreClock(12, 0);
+	const FString SaveSlot = TEXT("WateringTest_") + FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	APSGridWorld* Grid = World->SpawnActorDeferred<APSGridWorld>(APSGridWorld::StaticClass(), FTransform::Identity);
+	Grid->SaveSlotName = SaveSlot;
+	Grid->FinishSpawning(FTransform::Identity);
+	Grid->EnsureGrowthUpdates();
 	TArray<FIntPoint> Cells;
 	for (int32 X = -10; X < 10 && Cells.Num() < 3; ++X)
 	{
 		const FIntPoint Cell(X, -1);
-		const EPSTileType Ground = Grid->GetGroundTile(Cell);
-		if ((Ground == EPSTileType::Grass || Ground == EPSTileType::Dirt)
-			&& Grid->GetWorldObjectType(Cell) == EPSWorldObjectType::None)
-			Cells.Add(Cell);
+		if (Grid->TillCell(Cell) == EPSTileInteractionResult::Tilled) Cells.Add(Cell);
 	}
-	if (!TestEqual(TEXT("Three tillable cells available"), Cells.Num(), 3)) { World->DestroyWorld(false); return false; }
-	for (FIntPoint Cell : Cells) Grid->TillCell(Cell);
+	if (!TestEqual(TEXT("Three tillable cells"), Cells.Num(), 3)) { World->DestroyWorld(false); return false; }
+	TestEqual(TEXT("Watering outside world is rejected"), Grid->WaterCell(FIntPoint(MAX_int32, 0)), EPSTileInteractionResult::InvalidCell);
+	TestEqual(TEXT("Empty farmland can be watered"), Grid->WaterCell(Cells[2]), EPSTileInteractionResult::Watered);
+	TestEqual(TEXT("Repeat watering has no effect"), Grid->WaterCell(Cells[2]), EPSTileInteractionResult::NoEffect);
 	Grid->PlantSeed(Cells[0]);
-	Clock->Tick(14.0f);
 	Grid->PlantSeed(Cells[1]);
-	TestEqual(TEXT("Same half hour shares one bucket"), Grid->GrowingCrops.Num(), 1);
-	TestEqual(TEXT("New crop starts with one marker"), Grid->GetCropStage(Cells[0]), 1);
-	Clock->Tick(16.0f);
-	TestEqual(TEXT("Half an hour is not a full stage"), Grid->GetCropStage(Cells[0]), 1);
-	Grid->PlantSeed(Cells[2]);
-	TestEqual(TEXT("Next half hour creates another bucket"), Grid->GrowingCrops.Num(), 2);
-	Clock->Tick(1410.0f);
-	TestEqual(TEXT("One game day produces stage two"), Grid->GetCropStage(Cells[0]), 2);
-	TestEqual(TEXT("Same bucket grows together"), Grid->GetCropStage(Cells[1]), 2);
-	TestEqual(TEXT("Later bucket is still stage one"), Grid->GetCropStage(Cells[2]), 1);
-	Clock->Tick(30.0f);
-	TestEqual(TEXT("Later bucket grows on :30"), Grid->GetCropStage(Cells[2]), 2);
-	// Unload cached data: growth must keep updating the saved data without a renderer.
+	Grid->WaterCell(Cells[0]);
+	Clock->AdvanceGameHours(23);
+	TestTrue(TEXT("Wet soil persists through midnight"), Grid->IsCellWatered(Cells[0]));
+	TestEqual(TEXT("No growth before dawn"), Grid->GetCropStage(Cells[0]), 1);
+	Clock->AdvanceGameHours(1);
+	TestEqual(TEXT("Watered crop grows at six"), Grid->GetCropStage(Cells[0]), 2);
+	TestEqual(TEXT("Dry crop pauses"), Grid->GetCropStage(Cells[1]), 1);
+	TestFalse(TEXT("Empty soil dries at six"), Grid->IsCellWatered(Cells[2]));
+	TestFalse(TEXT("Crop soil dries after growth"), Grid->IsCellWatered(Cells[0]));
+	Grid->WaterCell(Cells[0]);
 	Grid->LoadedChunks.Reset();
-	Clock->Tick(1410.0f);
-	TestTrue(TEXT("Growth does not load invisible chunks"), Grid->LoadedChunks.IsEmpty());
-	TestEqual(TEXT("Unloaded crop reaches stage three"), Grid->GetCropStage(Cells[0]), 3);
-	const FIntPoint ChunkCoord = PSGrid::CellToChunk(Cells[0], Grid->ChunkSize);
-	Grid->GetOrCreateChunk(ChunkCoord);
-	TestEqual(TEXT("Reloaded chunk has current stage"), Grid->GetCropStage(Cells[0]), 3);
-	Clock->Tick(11.0f);
+	Clock->AdvanceGameDays(1);
+	TestTrue(TEXT("Daily growth does not load invisible chunks"), Grid->LoadedChunks.IsEmpty());
+	TestEqual(TEXT("Watered unloaded crop grows"), Grid->GetCropStage(Cells[0]), 3);
+	TestEqual(TEXT("Second dry dawn kills crop"), Grid->GetCropType(Cells[1]), EPSCropType::None);
+	TestEqual(TEXT("Dead crop leaves tilled soil"), Grid->GetGroundTile(Cells[1]), EPSTileType::TilledSoil);
+	TestEqual(TEXT("Dead crop cannot be harvested"), Grid->HarvestCrop(Cells[1]), EPSTileInteractionResult::NoEffect);
+	for (int32 Day = 0; Day < 2; ++Day) { Grid->WaterCell(Cells[0]); Clock->AdvanceGameDays(1); }
+	TestEqual(TEXT("Four watered days reaches maturity"), Grid->GetCropStage(Cells[0]), 5);
+	TestEqual(TEXT("Mature harvest succeeds"), Grid->HarvestCrop(Cells[0]), EPSTileInteractionResult::Harvested);
+	Grid->PlantSeed(Cells[0]);
+	Clock->AdvanceGameDays(1);
+	Grid->WaterCell(Cells[0]);
 	Grid->SaveWorld();
-	Clock->OnClockChanged.RemoveDynamic(Grid, &APSGridWorld::HandleClockChanged);
-
-	UWorld* RestoredWorld = UWorld::CreateWorld(EWorldType::Game, false, NAME_None, nullptr, true, ERHIFeatureLevel::Num, &Init);
-	RestoredWorld->InitializeActorsForPlay(FURL());
-	UPSGameTimeSubsystem* RestoredClock = RestoredWorld->GetSubsystem<UPSGameTimeSubsystem>();
-	APSGridWorld* Restored = RestoredWorld->SpawnActor<APSGridWorld>();
-	Restored->SaveSlotName = Slot;
-	Restored->LoadWorld();
-	TestEqual(TEXT("Saved clock restores the day"), RestoredClock->GetDay(), int64(3));
-	TestEqual(TEXT("Saved clock restores the time"), RestoredClock->GetMinuteOfDay(), 360);
-	TestEqual(TEXT("Saved clock restores partial-step time"), RestoredClock->GetSecondsIntoStep(), 11.0);
-	TestEqual(TEXT("Reload preserves growth age"), Restored->GetCropStage(Cells[0]), 3);
-	TestEqual(TEXT("Reload preserves later bucket"), Restored->GetCropStage(Cells[2]), 2);
-	RestoredClock->Tick(19.0f);
-	TestEqual(TEXT("Reload preserves partial-day progress"), Restored->GetCropStage(Cells[2]), 3);
-	RestoredClock->Tick(2880.0f);
-	for (FIntPoint Cell : Cells) TestEqual(TEXT("Four game days completes all stages"), Restored->GetCropStage(Cell), 5);
-	TestTrue(TEXT("Mature crops leave growth scheduler"), Restored->GrowingCrops.IsEmpty());
-	RestoredClock->Tick(1440.0f);
-	TestEqual(TEXT("Mature crop stays at five"), Restored->GetCropStage(Cells[0]), 5);
-	Restored->LoadWorld();
-	TestEqual(TEXT("Maturity survives reload"), Restored->GetCropStage(Cells[0]), 5);
-	TestEqual(TEXT("Bare hands remove a mature crop without harvesting"), Restored->RemoveCrop(Cells[0]), EPSTileInteractionResult::CropRemoved);
-	TestEqual(TEXT("Removed mature crop clears the tile"), Restored->GetCropType(Cells[0]), EPSCropType::None);
-	TestEqual(TEXT("Removed crop cannot be harvested"), Restored->HarvestCrop(Cells[0]), EPSTileInteractionResult::NoEffect);
-	TestEqual(TEXT("Another mature crop is harvested with the hoe"), Restored->HarvestCrop(Cells[1]), EPSTileInteractionResult::Harvested);
-	TestEqual(TEXT("Harvest clears the crop but keeps the tile"), Restored->GetCropType(Cells[1]), EPSCropType::None);
-
-	TestEqual(TEXT("One full day grows one stage"), PSCropGrowth::GetStage(47, 95), uint8(2));
-	TestEqual(TEXT("Four days reaches stage five"), PSCropGrowth::GetStage(47, 239), uint8(5));
-	TestEqual(TEXT("One half hour short remains at four"), PSCropGrowth::GetStage(47, 238), uint8(4));
-
-	APSTileChunkActor* Renderer = RestoredWorld->SpawnActor<APSTileChunkActor>();
+	Grid->LoadWorld();
+	TestTrue(TEXT("Save restores moisture"), Grid->IsCellWatered(Cells[0]));
+	Clock->AdvanceGameDays(1);
+	TestEqual(TEXT("Water resets dry streak and permits growth"), Grid->GetCropStage(Cells[0]), 2);
+	Grid->SaveWorld();
+	Grid->LoadWorld();
+	Clock->AdvanceGameDays(1);
+	TestEqual(TEXT("First dry dawn after reload preserves crop"), Grid->GetCropStage(Cells[0]), 2);
+	Grid->SaveWorld();
+	Grid->LoadWorld();
+	Clock->AdvanceGameHours(6);
+	TestEqual(TEXT("Six-hour skip without dawn preserves stage"), Grid->GetCropStage(Cells[0]), 2);
+	Clock->AdvanceGameHours(18);
+	TestEqual(TEXT("Saved dry streak kills crop on second dawn"), Grid->GetCropType(Cells[0]), EPSCropType::None);
+	Grid->PlantSeed(Cells[0]);
+	Grid->WaterCell(Cells[0]);
+	Clock->AdvanceGameDays(28);
+	TestEqual(TEXT("Long skip processes wet first day and dry days"), Grid->GetCropType(Cells[0]), EPSCropType::None);
+	TestFalse(TEXT("Long skip clears moisture"), Grid->IsCellWatered(Cells[0]));
+	TestTrue(TEXT("Dead crops leave scheduler"), Grid->GrowingCrops.IsEmpty());
+	APSTileChunkActor* Renderer = World->SpawnActor<APSTileChunkActor>();
 	FPSChunkData RenderData;
-	RenderData.Cells.SetNum(1);
+	RenderData.Cells.SetNum(4);
 	RenderData.Cells[0].GroundType = EPSTileType::TilledSoil;
+	RenderData.Cells[1].GroundType = EPSTileType::TilledSoil;
+	RenderData.Cells[0].Variant = 5;
+	RenderData.Cells[1].Variant = 5;
+	RenderData.Cells[0].bWatered = true;
 	RenderData.Cells[0].CropType = EPSCropType::TestCrop;
-	TArray<UHierarchicalInstancedStaticMeshComponent*> Instances;
-	Renderer->GetComponents(Instances);
-	for (int32 Stage = 1; Stage <= 5; ++Stage)
+	RenderData.Cells[0].GrowthStage = 5;
+	Renderer->Rebuild(RenderData, 2, 100.0f);
+	TArray<UHierarchicalInstancedStaticMeshComponent*> Components;
+	Renderer->GetComponents(Components);
+	for (auto* Component : Components)
 	{
-		RenderData.Cells[0].GrowthStage = static_cast<uint8>(Stage);
-		Renderer->Rebuild(RenderData, 1, 100.0f);
-		for (auto* Component : Instances)
-			if (Component->GetFName() == TEXT("SeedInstances"))
-				TestEqual(TEXT("Marker count matches growth stage"), Component->GetInstanceCount(), Stage);
+		if (Component->GetFName() == TEXT("WetSoilInstances")) TestEqual(TEXT("Wet soil render instance"), Component->GetInstanceCount(), 1);
+		if (Component->GetFName() == TEXT("FarmVariant_5_4")) TestEqual(TEXT("Wet soil retains base farm artwork"), Component->GetInstanceCount(), 2);
+		if (Component->GetFName() == TEXT("SeedInstances")) TestEqual(TEXT("Mature crop renders five markers"), Component->GetInstanceCount(), 5);
 	}
-	Renderer->Rebuild(RenderData, 1, 100.0f);
-	for (auto* Component : Instances)
-		if (Component->GetFName() == TEXT("SeedInstances"))
-			TestEqual(TEXT("Rebuild does not duplicate mature markers"), Component->GetInstanceCount(), 5);
-
-	// Old saves have neither clock reference nor planting timestamps.
 	UPSWorldSaveGame* Legacy = NewObject<UPSWorldSaveGame>();
 	FPSChunkSaveData LegacyChunk;
 	LegacyChunk.Coordinate = FIntPoint::ZeroValue;
-	LegacyChunk.Cells.SetNum(16 * 16);
+	LegacyChunk.Cells.SetNum(256);
 	LegacyChunk.Cells[0].GroundType = EPSTileType::TilledSoil;
 	LegacyChunk.Cells[0].CropType = EPSCropType::TestCrop;
+	LegacyChunk.Cells[0].GrowthStage = 3;
 	Legacy->ModifiedChunks.Add(LegacyChunk);
-	UGameplayStatics::SaveGameToSlot(Legacy, Slot, 0);
-	Restored->LoadWorld();
-	TestEqual(TEXT("Legacy seed starts at one"), Restored->GetCropStage(FIntPoint::ZeroValue), 1);
-	RestoredClock->Tick(1440.0f);
-	TestEqual(TEXT("Legacy seed can continue growing"), Restored->GetCropStage(FIntPoint::ZeroValue), 2);
-	Legacy->GrowthClockHalfHour = 20;
-	Legacy->ModifiedChunks[0].Cells[0].PlantedHalfHour = 16;
-	Legacy->ModifiedChunks[0].Cells[0].GrowthStage = 3;
-	UGameplayStatics::SaveGameToSlot(Legacy, Slot, 0);
-	Restored->LoadWorld();
-	TestEqual(TEXT("Older interval save does not move a crop backwards"), Restored->GetCropStage(FIntPoint::ZeroValue), 3);
-	Restored->ResetWorld();
-	TestTrue(TEXT("Reset clears growth buckets"), Restored->GrowingCrops.IsEmpty());
-	RestoredClock->Tick(30.0f);
-	TestEqual(TEXT("Reset crop does not return"), Restored->GetCropStage(FIntPoint::ZeroValue), 0);
-	const int64 BeforeSkip = RestoredClock->GetHalfHourIndex();
-	RestoredClock->AdvanceGameHours(6);
-	TestEqual(TEXT("Six-hour shortcut advances the subsystem clock"), RestoredClock->GetHalfHourIndex(), BeforeSkip + 12);
-	UGameplayStatics::DeleteGameInSlot(Slot, 0);
-	RestoredWorld->DestroyWorld(false);
+	UGameplayStatics::SaveGameToSlot(Legacy, SaveSlot, 0);
+	Grid->LoadWorld();
+	TestEqual(TEXT("Old save preserves stage"), Grid->GetCropStage(FIntPoint::ZeroValue), 3);
+	TestTrue(TEXT("Old crop receives one watered day"), Grid->IsCellWatered(FIntPoint::ZeroValue));
+	Clock->AdvanceGameDays(1);
+	TestEqual(TEXT("Migrated crop continues growing"), Grid->GetCropStage(FIntPoint::ZeroValue), 4);
+	Grid->ResetWorld();
+	TestTrue(TEXT("Reset clears scheduler"), Grid->GrowingCrops.IsEmpty());
 	World->DestroyWorld(false);
+	UGameplayStatics::DeleteGameInSlot(SaveSlot, 0);
 	return true;
 }
 #endif

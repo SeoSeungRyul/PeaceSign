@@ -38,7 +38,7 @@ void UPSPlayerStatusWidget::NativeOnInitialized()
 	for (int32 Index = 0; Index < 4; ++Index)
 	{
 		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>();
-		FSlateFontInfo Font = Label->GetFont();
+		FSlateFontInfo Font = WithProjectFont(Label->GetFont());
 		Font.Size = 14;
 		Label->SetFont(Font);
 		Rows->AddChildToVerticalBox(Label)->SetPadding(FMargin(0, 4, 0, 3));
@@ -68,10 +68,10 @@ void UPSPlayerStatusWidget::BuildEquipmentPanel()
 	UVerticalBox* Rows = WidgetTree->ConstructWidget<UVerticalBox>();
 	EquipmentPanel->SetContent(Rows);
 	EquipmentLabel = WidgetTree->ConstructWidget<UTextBlock>();
-	FSlateFontInfo Font = EquipmentLabel->GetFont();
+	FSlateFontInfo Font = WithProjectFont(EquipmentLabel->GetFont());
 	Font.Size = 22;
-	Font.TypefaceFontName = FName(TEXT("Bold"));
 	EquipmentLabel->SetFont(Font);
+	EquipmentLabel->SetAutoWrapText(true);
 	Rows->AddChildToVerticalBox(EquipmentLabel);
 	EquipmentHint = WidgetTree->ConstructWidget<UTextBlock>();
 	Font.Size = 12;
@@ -87,7 +87,7 @@ void UPSPlayerStatusWidget::BuildEquipmentPanel()
 	SetHarvestedCropCount(0);
 }
 
-void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment, const int32 HotbarSlot, const int32 Quantity)
+void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment, const int32 HotbarSlot, const int32 Quantity, const int32 HoeChargeDepth)
 {
 	if (!EquipmentLabel || !EquipmentHint || !EquipmentPanel) return;
 	const bool bHoe = InEquipment == EPSEquipment::Hoe;
@@ -95,20 +95,28 @@ void UPSPlayerStatusWidget::SetEquipment(const EPSEquipment InEquipment, const i
 	const bool bFishing = InEquipment == EPSEquipment::FishingRod;
 	const bool bPickaxe = InEquipment == EPSEquipment::Pickaxe;
 	const bool bShovel = InEquipment == EPSEquipment::Shovel;
+	const bool bWatering = InEquipment == EPSEquipment::WateringCan;
+	const bool bAxe = InEquipment == EPSEquipment::Axe;
 	const bool bUnusable = InEquipment == EPSEquipment::UnusableItem;
 	const FString Key = HotbarSlot == 9 ? TEXT("0") : HotbarSlot >= 0 ? FString::FromInt(HotbarSlot + 1) : TEXT("-");
-	const FString ItemName = bHoe ? TEXT("괭이") : bSeed ? TEXT("씨앗") : bFishing ? TEXT("낚싯대")
-		: bPickaxe ? TEXT("돌 곡괭이") : bShovel ? TEXT("삽") : bUnusable ? TEXT("사용할 수 없는 아이템") : TEXT("맨손");
+	const FString ItemName = bHoe ? (HoeChargeDepth == 3 ? TEXT("2차 강화 괭이") : HoeChargeDepth > 0 ? TEXT("1차 강화 괭이") : TEXT("괭이")) : bSeed ? TEXT("씨앗") : bFishing ? TEXT("낚싯대")
+		: bPickaxe ? TEXT("돌 곡괭이") : bShovel ? TEXT("삽") : bWatering ? TEXT("물뿌리개") : bAxe ? TEXT("도끼") : bUnusable ? TEXT("사용할 수 없는 아이템") : TEXT("맨손");
 	const FString Count = bSeed ? FString::Printf(TEXT("  x%d"), FMath::Max(0, Quantity)) : TEXT("");
 	EquipmentLabel->SetText(FText::FromString(FString::Printf(TEXT("[%s] 현재 장비  ·  %s%s"), *Key, *ItemName, *Count)));
-	EquipmentHint->SetText(bHoe
-		? NSLOCTEXT("Equipment", "HoeHint", "우클릭 · 밭 갈기 / 다 자란 작물 수확\n[1~0] 인벤토리 첫 줄 선택")
+	EquipmentHint->SetText(bHoe && HoeChargeDepth == 3
+		? NSLOCTEXT("Equipment", "SecondHoeHint", "짧게 우클릭 · 앞 1칸\n0.5초 누르고 떼기 · 전방 3×3칸\n사용 동작 0.5초 · 이동·교체 불가")
+		: bHoe && HoeChargeDepth > 0
+		? NSLOCTEXT("Equipment", "ChargedHoeHint", "짧게 우클릭 · 앞 1칸\n0.5초 누르고 떼기 · 전방 가로 3칸\n사용 동작 0.5초 · 이동·교체 불가")
+		: bHoe
+		? NSLOCTEXT("Equipment", "HoeHint", "앞 1칸 우클릭 · 밭 갈기 / 수확\n0.5초 사용 중 이동·장비 교체 불가")
 		: bSeed
 			? NSLOCTEXT("Equipment", "SeedHint", "우클릭 · 씨앗 1개 심기\n[1~0] 인벤토리 첫 줄 선택")
 			: bFishing ? NSLOCTEXT("Equipment", "FishingRodHint", "직선 2칸 / 대각선 1칸 내 물칸 우클릭 · 낚시 시작 / 이동 시 해제\n[1~0] 인벤토리 첫 줄 선택")
 			: bPickaxe ? NSLOCTEXT("Equipment", "PickaxeHint", "직선 2칸 / 대각선 1칸 내 돌 우클릭 · 채굴\n[1~0] 인벤토리 첫 줄 선택")
 			: bShovel ? NSLOCTEXT("Equipment", "ShovelHint", "우클릭 · 풀 ↔ 흙 전환\n[1~0] 인벤토리 첫 줄 선택")
+			: bWatering ? NSLOCTEXT("Equipment", "WateringHint", "앞 1칸 우클릭 · 밭에 물 주기\n0.5초 사용 중 이동·장비 교체 불가")
 			: bUnusable ? NSLOCTEXT("Equipment", "UnusableHint", "이 아이템은 아직 사용할 수 없습니다.\n[1~0] 인벤토리 첫 줄 선택")
+			: bAxe ? NSLOCTEXT("Equipment", "AxeHint", "나무 우클릭 · 벌목\n다른 장비로 나무 우클릭 · 씨앗 흔들기")
 			: NSLOCTEXT("Equipment", "BareHandsHint", "우클릭 · 작물 제거\n[1~0] 인벤토리 첫 줄 선택 · 빈 슬롯은 맨손"));
 	EquipmentLabel->SetColorAndOpacity(FSlateColor(bHoe
 		? FLinearColor(1.0f, 0.8f, 0.25f)
