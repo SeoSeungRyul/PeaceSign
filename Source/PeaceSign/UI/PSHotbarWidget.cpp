@@ -80,6 +80,8 @@ bool UPSHotbarWidget::IsSelected(const int32 Index) const
 
 bool UPSHotbarWidget::MoveItem(const EPSInventoryArea FromArea, const int32 FromIndex, const int32 ToIndex)
 {
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	if (Controller && Controller->IsFarmActionActive()) return false;
 	return InventoryComponent && InventoryComponent->MoveItem(
 		FromArea, FromIndex, EPSInventoryArea::Hotbar, ToIndex);
 }
@@ -101,10 +103,11 @@ void UPSHotbarWidget::RefreshHotbar()
 	InvalidateLayoutAndVolatility();
 }
 
-void UPSHotbarSlotWidget::Setup(UPSHotbarWidget* InHotbar, const int32 InIndex)
+void UPSHotbarSlotWidget::Setup(UPSHotbarWidget* InHotbar, const int32 InIndex, const bool bInDrawBackground)
 {
 	Hotbar = InHotbar;
 	Index = InIndex;
+	bDrawBackground = bInDrawBackground;
 	SetVisibility(ESlateVisibility::Visible);
 	ForceVolatile(true);
 }
@@ -122,8 +125,12 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 			Geometry.ToPaintGeometry(FVector2D(W, H) * Scale, FSlateLayoutTransform(FVector2D(X, Y) * Scale)),
 			FCoreStyle::Get().GetBrush("WhiteBrush"), ESlateDrawEffect::None, Color);
 	};
-	Rect(0, 0, 64, 64, HotbarHex(TEXT("17120E")));
-	Rect(3, 3, 58, 58, IsHovered() ? HotbarHex(TEXT("C79559")) : HotbarHex(TEXT("96683E")));
+	if (bDrawBackground)
+	{
+		Rect(0, 0, 64, 64, HotbarHex(TEXT("17120E")));
+		Rect(3, 3, 58, 58, IsHovered() ? HotbarHex(TEXT("C79559")) : HotbarHex(TEXT("96683E")));
+	}
+	else if (IsHovered()) Rect(3, 3, 58, 58, FLinearColor(1, 1, 1, 0.15f));
 	if (Hotbar->IsSelected(Index))
 	{
 		Rect(1, 1, 62, 4, HotbarHex(TEXT("8FE36A")));
@@ -132,7 +139,7 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 	const FString Key = Index == 9 ? TEXT("0") : FString::FromInt(Index + 1);
 	FSlateDrawElement::MakeText(Elements, ++Layer,
 		Geometry.ToPaintGeometry(FVector2D(14, 14) * Scale, FSlateLayoutTransform(FVector2D(7, 5) * Scale)),
-		Key, FCoreStyle::GetDefaultFontStyle("Bold", 9), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
+		Key, MakeProjectFont(9), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
 	const FPSItemStack* Item = Hotbar->GetItem(Index);
 	if (!Item) return Layer;
 	const FPSItemDefinition& Definition = PSItems::GetDefinition(*Item);
@@ -148,6 +155,8 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 		const FLinearColor Color = Definition.Color;
 		switch (Definition.PlaceholderIcon)
 		{
+		case 9: Rect(29, 18, 6, 36, Color); Rect(16, 16, 27, 14, Color); break;
+		case 8: Rect(18, 27, 25, 20, Color); Rect(23, 19, 16, 5, Color); Rect(39, 28, 12, 5, Color); Rect(49, 32, 4, 8, Color); break;
 		case 0: Rect(29, 16, 5, 34, HotbarHex(TEXT("735037"))); Rect(17, 14, 29, 8, Color); break;
 		case 1: Rect(20, 24, 24, 23, HotbarHex(TEXT("E5CE95"))); Rect(24, 20, 16, 5, HotbarHex(TEXT("765A36"))); Rect(30, 28, 4, 13, Color); break;
 		case 2: Rect(24, 25, 19, 17, Color); Rect(28, 42, 11, 6, Color); Rect(34, 16, 8, 5, HotbarHex(TEXT("86A95E"))); break;
@@ -175,7 +184,7 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 		Rect(X - 3, 44, Count.Len() * 8 + 5, 16, FLinearColor(0.045f, 0.032f, 0.02f, 0.85f));
 		FSlateDrawElement::MakeText(Elements, ++Layer,
 			Geometry.ToPaintGeometry(FVector2D(50, 18) * Scale, FSlateLayoutTransform(FVector2D(X, 44) * Scale)),
-			Count, FCoreStyle::GetDefaultFontStyle("Bold", 11), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
+			Count, MakeProjectFont(11), ESlateDrawEffect::None, HotbarHex(TEXT("FFF0D1")));
 	}
 	return Layer;
 }
@@ -183,7 +192,11 @@ int32 UPSHotbarSlotWidget::NativePaint(const FPaintArgs& Args, const FGeometry& 
 FReply UPSHotbarSlotWidget::NativeOnMouseButtonDown(const FGeometry& Geometry, const FPointerEvent& Event)
 {
 	if (!Hotbar || Event.GetEffectingButton() != EKeys::LeftMouseButton) return FReply::Unhandled();
-	if (APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer())) Controller->SelectHotbarSlot(Index);
+	if (APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer()))
+	{
+		if (Controller->IsFarmActionActive()) return FReply::Handled();
+		Controller->SelectHotbarSlot(Index);
+	}
 	return Hotbar->GetItem(Index)
 		? FReply::Handled().DetectDrag(TakeWidget(), EKeys::LeftMouseButton)
 		: FReply::Handled();
@@ -191,6 +204,8 @@ FReply UPSHotbarSlotWidget::NativeOnMouseButtonDown(const FGeometry& Geometry, c
 
 void UPSHotbarSlotWidget::NativeOnDragDetected(const FGeometry&, const FPointerEvent&, UDragDropOperation*& Operation)
 {
+	const APSPlayerController* Controller = Cast<APSPlayerController>(GetOwningPlayer());
+	if (Controller && Controller->IsFarmActionActive()) return;
 	if (!Hotbar || !Hotbar->GetItem(Index)) return;
 	UPSInventoryDragOperation* Drag = NewObject<UPSInventoryDragOperation>(this);
 	Drag->InventoryComponent = Hotbar->GetInventoryComponent();
@@ -220,5 +235,5 @@ void UPSHotbarSlotWidget::NativeOnMouseEnter(const FGeometry& Geometry, const FP
 	Super::NativeOnMouseEnter(Geometry, Event);
 	if (!Hotbar) return;
 	const FPSItemStack* Item = Hotbar->GetItem(Index);
-	SetToolTipText(Item ? Hotbar->GetItemDisplayName(*Item) : FText::FromString(TEXT("빈 단축 슬롯")));
+	SetProjectToolTipText(Item ? Hotbar->GetItemDisplayName(*Item) : FText::FromString(TEXT("빈 단축 슬롯")));
 }

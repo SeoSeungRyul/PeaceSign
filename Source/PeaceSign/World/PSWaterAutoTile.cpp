@@ -72,10 +72,14 @@ namespace
 		TEXT("/Game/Art/Tiles/Water/Set11/Water_Set11_T.Water_Set11_T"),
 		TEXT("/Game/Art/Tiles/Water/Set11/Water_Set11_L.Water_Set11_L"),
 		TEXT("/Game/Art/Tiles/Water/Set11/Water_Set11_R.Water_Set11_R"),
-		TEXT("/Game/Art/Tiles/Water/Set11/Water_Set11_B.Water_Set11_B")
+		TEXT("/Game/Art/Tiles/Water/Set11/Water_Set11_B.Water_Set11_B"),
+		TEXT("/Game/Art/Tiles/Water/Set12/Water_Set12_T.Water_Set12_T"),
+		TEXT("/Game/Art/Tiles/Water/Set12/Water_Set12_L.Water_Set12_L"),
+		TEXT("/Game/Art/Tiles/Water/Set12/Water_Set12_R.Water_Set12_R"),
+		TEXT("/Game/Art/Tiles/Water/Set12/Water_Set12_B.Water_Set12_B")
 	};
 	static_assert(UE_ARRAY_COUNT(TexturePaths) == PSWaterAutoTile::VariantCount);
-	constexpr uint16 AddedMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270};
+	constexpr uint16 AddedMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270, 463, 367, 415, 319};
 	static_assert(UE_ARRAY_COUNT(AddedMasks) + 51 == PSWaterAutoTile::VariantCount);
 }
 

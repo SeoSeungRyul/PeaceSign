@@ -6,6 +6,7 @@
 #include "GameFramework/PlayerController.h"
 #include "PSEquipmentTypes.h"
 #include "Fishing/PSFishingTypes.h"
+#include "Inventory/PSItemTypes.h"
 #include "PSPlayerController.generated.h"
 
 class UPSPlayerStatusWidget;
@@ -16,11 +17,16 @@ class UPSInventoryComponent;
 class UPSPlayerSkillComponent;
 class UPSFishingJournalComponent;
 class UPSFishingWidget;
+class UPSFishingJournalWidget;
+class APSFishingBobber;
+class USoundBase;
 class UDataTable;
 class UInputAction;
 class UInputMappingContext;
 class UTexture2D;
 class APSGridWorld;
+class APSFarmTargetMarker;
+class UPSGatheringActionComponent;
 struct FInputActionValue;
 struct FPSItemStack;
 enum class EPSTileInteractionResult : uint8;
@@ -32,9 +38,20 @@ class PEACESIGN_API APSPlayerController : public APlayerController
 	GENERATED_BODY()
 
 public:
+	virtual void UpdateCameraManager(float DeltaSeconds) override;
 	APSPlayerController();
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Gathering")
+	TObjectPtr<UPSGatheringActionComponent> GatheringAction;
+	virtual void FlushPressedKeys() override;
 	UFUNCTION(BlueprintCallable, Category="UI|Inventory")
 	void CloseInventory();
+	UFUNCTION(BlueprintCallable, Category="Fishing|Journal") void ToggleFishingJournal();
+	UFUNCTION(BlueprintCallable, Category="Fishing|Journal") void CloseFishingJournal();
+	UFUNCTION(BlueprintCallable, Category="UI|Inventory") void ShowInventoryTab();
+	UFUNCTION(BlueprintCallable, Category="UI|Inventory") void HandleInventory();
+	UFUNCTION(BlueprintPure, Category="Fishing|Journal") TArray<FName> GetFishIds() const;
+	UFUNCTION(BlueprintPure, Category="Fishing|Journal") bool HasMasteredFish(FName FishId) const;
+	UTexture2D* GetFishIcon(FName FishId) const;
 	UFUNCTION(BlueprintPure, Category = "Equipment")
 	EPSEquipment GetEquipment() const { return Equipment; }
 	UFUNCTION(BlueprintPure, Category = "Farming")
@@ -49,14 +66,25 @@ public:
 	void SelectHotbarSlot(int32 SlotIndex);
 	UFUNCTION(BlueprintPure, Category = "Inventory|Hotbar")
 	int32 GetSelectedHotbarSlot() const { return SelectedHotbarSlot; }
+	UFUNCTION(BlueprintPure, Category="Farming") bool IsFarmActionActive() const { return bFarmActionActive; }
+	UFUNCTION(BlueprintPure, Category="Farming") float GetFarmActionTimeRemaining() const { return FarmActionTimeRemaining; }
+	UFUNCTION(BlueprintPure, Category="Farming") bool IsFarmCharging() const { return bFarmCharging; }
+	UFUNCTION(BlueprintPure, Category="Farming") float GetFarmChargeProgress() const { return FMath::Clamp(FarmChargeElapsed / 0.5f, 0.0f, 1.0f); }
 
 	UFUNCTION(BlueprintCallable, Category = "Fishing")
 	bool TryUseFishingRod(FIntPoint WaterCell);
+	/** Only a fresh right-click during CastTiming confirms the throw. */
+	UFUNCTION(BlueprintCallable, Category = "Fishing") bool ConfirmFishingCast();
+	UFUNCTION(BlueprintPure, Category = "Fishing") float GetFishingCastPosition() const;
+	UFUNCTION(BlueprintPure, Category = "Fishing") EPSFishingCastGrade GetFishingCastGrade() const { return FishingCastGrade; }
 
 	UFUNCTION(BlueprintPure, Category = "Fishing")
 	bool IsFishing() const { return FishingState != EPSFishingState::Idle; }
 	UFUNCTION(BlueprintPure, Category = "Fishing")
 	EPSFishingState GetFishingState() const { return FishingState; }
+	/** Shared camera/UI anchor after a confirmed cast, until success, failure or cancellation. */
+	UFUNCTION(BlueprintPure, Category = "Fishing")
+	bool GetFishingFocusLocation(FVector& OutLocation) const;
 	UFUNCTION(BlueprintCallable, Category = "Fishing")
 	bool SubmitFishingDirection(EPSFishingDirection Direction);
 	UFUNCTION(BlueprintPure, Category = "Fishing")
@@ -73,6 +101,13 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void OnUnPossess() override;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Farming", meta=(ClampMin="0.01"))
+	float FarmActionDuration = 0.5f;
+	UFUNCTION(BlueprintImplementableEvent, Category="Farming")
+	void OnFarmToolStarted(EPSEquipment Tool, FIntPoint Cell, float Duration);
+	UFUNCTION(BlueprintImplementableEvent, Category="Farming")
+	void OnFarmToolFinished(EPSEquipment Tool, FIntPoint Cell, bool bSucceeded);
 	UPROPERTY(EditDefaultsOnly, Category="UI")
 	TSubclassOf<UPSPlayerStatusWidget> PlayerStatusWidgetClass;
 	UPROPERTY(EditDefaultsOnly, Category="UI")
@@ -86,10 +121,26 @@ protected:
 	/** Icon rows referenced by FPSFishDefinition::IconID. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing")
 	TObjectPtr<UDataTable> FishIconDataTable;
+	/** Green, Yellow and Red rows using FPSFishingCastDefinition. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Casting") TObjectPtr<UDataTable> FishingCastDataTable;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Casting", meta=(ClampMin="0.01")) float CastWindupDuration = 0.35f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Casting", meta=(ClampMin="0.01")) float CastTravelSeconds = 0.7f;
+	/** Flight of the bobber, independently of the casting gauge. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Casting", meta=(ClampMin="0.01")) float CastFlightSeconds = 0.6f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Visual", meta=(ClampMin="0.1")) float FishingResultSeconds = 3.0f;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Casting") FPSFishingCastBands CastBands;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Visual") TSubclassOf<APSFishingBobber> FishingBobberClass;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Audio") TObjectPtr<USoundBase> FishingCastSound;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Audio") TObjectPtr<USoundBase> FishingBiteSound;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Audio") TObjectPtr<USoundBase> FishingSuccessSound;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Audio") TObjectPtr<USoundBase> FishingFailureSound;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Audio") TObjectPtr<USoundBase> FishingUnavailableSound;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Audio") TObjectPtr<USoundBase> FishingRetrieveSound;
+	UPROPERTY(EditDefaultsOnly, Category="UI") TSubclassOf<UPSFishingJournalWidget> FishingJournalWidgetClass;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
 	float MinBiteDelay = 1.0f;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
-	float MaxBiteDelay = 4.0f;
+	float MaxBiteDelay = 10.0f;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
 	float BiteWindowDuration = 5.0f;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing", meta=(ClampMin="0.1"))
@@ -116,6 +167,8 @@ protected:
 
 	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing")
 	void OnFishingRodUsed(FIntPoint WaterCell);
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing") void OnFishingCastStarted();
+	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing") void OnFishingUnavailable(const FText& Reason);
 	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing") void OnFishingBite();
 	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing") void OnFishingMinigameStarted();
 	UFUNCTION(BlueprintImplementableEvent, Category = "Fishing") void OnFishingSucceeded(const FText& FishName, int32 SizeCm);
@@ -147,7 +200,44 @@ protected:
 	void OnCraftRequested();
 
 private:
+	friend class FPSFarmToolActionTest;
+	friend class FPSChargedHoeTest;
+	friend class FPSSecondHoeTest;
+	bool UsesFarmTool() const;
+	bool CanChargeEquippedHoe() const;
+	int32 GetEquippedHoeChargeDepth() const;
+	bool IsFarmContextValid() const;
+	void CaptureFarmContext();
+	bool BeginFarmCharge();
+	void HandleSpecialAttackReleased();
+	void HandleSpecialAttackCanceled();
+	TArray<FIntPoint> GetFarmTargetCells(bool bCharged) const;
+	EPSTileInteractionResult EvaluateFarmActionCell(FIntPoint Cell, bool bCharged) const;
+	TOptional<FIntPoint> GetFarmFrontCell() const;
+	EPSTileInteractionResult EvaluateFarmTarget(FIntPoint Cell) const;
+	bool BeginFarmAction(bool bCharged = false);
+	void UpdateFarmAction(float DeltaSeconds);
+	void CancelFarmAction();
+	void UpdateFarmTargetMarker();
+	bool bFarmActionActive = false;
+	bool bFarmCharging = false;
+	bool bFarmActionCharged = false;
+	float FarmChargeElapsed = 0;
+	bool bCompletingFarmAction = false;
+	float FarmActionTimeRemaining = 0;
+	TWeakObjectPtr<APawn> FarmActionPawn;
+	FIntPoint FarmActionCell = FIntPoint::ZeroValue;
+	TArray<FIntPoint> FarmActionCells;
+	int32 FarmActionSlot = INDEX_NONE;
+	FPSItemStack FarmActionItem;
+	EPSEquipment FarmActionEquipment = EPSEquipment::BareHands;
+	UPROPERTY(Transient) TObjectPtr<APSFarmTargetMarker> FarmTargetMarker;
+	UPROPERTY(Transient) TArray<TObjectPtr<APSFarmTargetMarker>> FarmSideMarkers;
 	friend class FPSFishingTest;
+	friend class FPSFishingOct26Test;
+	friend class FPSBookJournalTest;
+	friend class FPSGatheringInventoryTest;
+	friend struct FPSBookJournalSmoke;
 	friend class FPSFishingFlowTest;
 	friend class FPSFarmingInventoryTest;
 	friend class FPSMiningTest;
@@ -157,6 +247,9 @@ private:
 	bool AreFishingControlsLocked() const;
 	void UpdateFishing(float DeltaSeconds = 0.0f);
 	void BeginFishingBite();
+	void BeginFishingRetrieve();
+	void UpdateFishingVisual(float DeltaSeconds);
+	void PlayFishingSound(USoundBase* Sound) const;
 	void BeginFishingMinigame();
 	void CompleteFishing(bool bSuccess);
 	void StopFishing(bool bCancelled = true, bool bConsumeDurability = true);
@@ -164,7 +257,11 @@ private:
 	void SetFishingMovementLocked(bool bLocked);
 	void RefreshFishingWidget();
 	void GenerateFishingSequence();
-	FPSFishDefinition SelectFishDefinition(FName& OutFishId, int32 Season, int32 LocationId) const;
+	FPSFishDefinition SelectFishDefinition(FName& OutFishId, int32 Season, int32 LocationId,
+		EPSFishingCastGrade Grade = EPSFishingCastGrade::Green) const;
+	FPSFishingCastDefinition GetFishingCastDefinition(EPSFishingCastGrade Grade) const;
+	TOptional<FIntPoint> ResolveFishingLandingCell(int32 DistanceInCells) const;
+	void ShowFishingUnavailable(const FText& Reason, EPSFishingNoticeType Type = EPSFishingNoticeType::General);
 	UTexture2D* ResolveFishIcon(FName IconID) const;
 	void DropFishingReward(int32 Quantity = 1);
 	void DropStoneReward(FIntPoint Cell);
@@ -187,8 +284,27 @@ private:
 	TObjectPtr<UTexture2D> CurrentFishIcon;
 	mutable TMap<FName, TWeakObjectPtr<UTexture2D>> FishIconCache;
 	int32 CurrentFishSizeCm = 0;
-	float FishingMinigameTimeBonus = 0.0f;
-	float FishingExtraFishChance = 0.0f;
+	float FishingMinigameDuration = 10.0f;
+	float FishingBiteDelay = 0.0f;
+	float FishingCastElapsed = 0.0f;
+	float FishingCastTravelSeconds = 0.7f;
+	FPSFishingCastBands FishingBands;
+	float FishingResultElapsed = 0;
+	float FishingFlightDuration = .6f;
+	float FishingVisualElapsed = 0;
+	bool bFishingTerminalAnimation = false;
+	bool bFishingSuccessReleased = false;
+	bool bJournalOpen = false;
+	UPROPERTY(Transient) TObjectPtr<APSFishingBobber> FishingBobber;
+	UPROPERTY(Transient) TObjectPtr<UPSFishingJournalWidget> FishingJournalWidget;
+	EPSFishingCastGrade FishingCastGrade = EPSFishingCastGrade::Green;
+	TArray<FPSFishingCastDefinition> FishingCastDefinitions;
+	FPSItemStack FishingRodSnapshot;
+	int32 FishingRodSlot = INDEX_NONE;
+	int32 FishingSeason = 0;
+	FIntPoint FishingAimCell = FIntPoint::ZeroValue;
+	FVector FishingCastDirection = FVector::ZeroVector;
+	bool bFishingBait = false;
 	bool bFishingAutoHook = false;
 	bool bFishingDurabilityConsumed = false;
 	bool bEndingFishing = false;
@@ -224,7 +340,6 @@ private:
 	void HandleInteract();
 	void HandleSpecialAttack();
 	TOptional<FIntPoint> GetCursorCell() const;
-	void HandleInventory();
 	void HandleQuest();
 	void HandleAbility();
 	void HandleCraft();

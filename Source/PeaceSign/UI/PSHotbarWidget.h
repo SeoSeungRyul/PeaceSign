@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "PSUIWidget.h"
 #include "../Inventory/PSInventoryComponent.h"
 #include "PSHotbarWidget.generated.h"
 
@@ -9,11 +9,11 @@ class UPSHotbarWidget;
 class UTexture2D;
 
 UCLASS()
-class PEACESIGN_API UPSHotbarSlotWidget : public UUserWidget
+class PEACESIGN_API UPSHotbarSlotWidget : public UPSUIWidget
 {
 	GENERATED_BODY()
 public:
-	void Setup(UPSHotbarWidget* InHotbar, int32 InIndex);
+	void Setup(UPSHotbarWidget* InHotbar, int32 InIndex, bool bInDrawBackground = true);
 protected:
 	virtual int32 NativePaint(const FPaintArgs&, const FGeometry&, const FSlateRect&,
 		FSlateWindowElementList&, int32, const FWidgetStyle&, bool) const override;
@@ -24,10 +24,11 @@ protected:
 private:
 	UPROPERTY() TObjectPtr<UPSHotbarWidget> Hotbar;
 	int32 Index = INDEX_NONE;
+	bool bDrawBackground = true;
 };
 
 UCLASS()
-class PEACESIGN_API UPSHotbarWidget : public UUserWidget
+class PEACESIGN_API UPSHotbarWidget : public UPSUIWidget
 {
 	GENERATED_BODY()
 public:

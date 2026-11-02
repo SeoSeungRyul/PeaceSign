@@ -1,6 +1,9 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "PSGridWorld.h"
+#include "../Gathering/PSGatheringWorldComponent.h"
+#include "../Fishing/PSFishingWaterRegion.h"
+#include "EngineUtils.h"
 
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -15,11 +18,12 @@
 #endif
 #include "PSWorldSaveGame.h"
 #include "PSCropGrowth.h"
+#include "PSFarmAutoTile.h"
 #include "../Time/PSGameTimeSubsystem.h"
 
 namespace
 {
-	constexpr int32 CurrentWorldSaveVersion = 4;
+	constexpr int32 CurrentWorldSaveVersion = 6;
 	constexpr int32 LegacyStoneHealthScale = 10;
 
 	uint32 HashCell(const FIntPoint Cell, const int32 Seed)
@@ -42,6 +46,7 @@ APSGridWorld::APSGridWorld()
 
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	Gathering = CreateDefaultSubobject<UPSGatheringWorldComponent>(TEXT("Gathering"));
 
 	const auto AddMineralRule = [this](const EPSMineralType MineralType, const int32 MinimumBand, const int32 Weight)
 	{
@@ -76,6 +81,8 @@ void APSGridWorld::BeginPlay()
 	StartingWorldSeed = WorldSeed;
 	EnsureGrowthUpdates();
 	LoadWorld();
+	ApplyFishingTestPond();
+	Gathering->InitializeResources();
 
 	if (const APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
 	{
@@ -106,32 +113,60 @@ int64 APSGridWorld::GetGrowthHalfHour() const
 
 void APSGridWorld::HandleClockChanged()
 {
-	if (GrowingCrops.IsEmpty())
-	{
-		SaveWorld();
-		return;
-	}
 	const int64 Now = GetGrowthHalfHour();
+	const int64 Dawn = FMath::Max<int64>(0, (Now - 12) / 48);
 	TSet<FIntPoint> ChangedChunks;
+	for (auto& Pair : ModifiedChunks)
+	{
+		bool bChanged = false;
+		for (FPSTileCell& Tile : Pair.Value.Cells)
+		{
+			if (Tile.GroundType != EPSTileType::TilledSoil) continue;
+			if (Tile.LastFarmDawn < 0 || Dawn < Tile.LastFarmDawn)
+			{
+				Tile.LastFarmDawn = Dawn;
+				continue;
+			}
+			const int64 Days = Dawn - Tile.LastFarmDawn;
+			if (Days <= 0) continue;
+			// Only the first skipped day can be watered. Two subsequent dry days kill any crop.
+			for (int64 Day = 0; Day < FMath::Min<int64>(Days, 3); ++Day)
+			{
+				if (Tile.CropType != EPSCropType::None)
+				{
+					if (Tile.bWatered)
+					{
+						Tile.DryDays = 0;
+						Tile.GrowthStage = FMath::Min<int32>(PSCropGrowth::MaxStage, Tile.GrowthStage + 1);
+					}
+					else if (++Tile.DryDays >= 2)
+					{
+						Tile.CropType = EPSCropType::None;
+						Tile.CropId = INDEX_NONE;
+						Tile.PlantedHalfHour = -1;
+						Tile.GrowthStage = 1;
+						Tile.DryDays = 0;
+					}
+				}
+				Tile.bWatered = false;
+			}
+			Tile.LastFarmDawn = Dawn;
+			bChanged = true;
+		}
+		if (bChanged)
+		{
+			if (FPSChunkData* Loaded = LoadedChunks.Find(Pair.Key)) Loaded->Cells = Pair.Value.Cells;
+			ChangedChunks.Add(Pair.Key);
+		}
+	}
+	// Keep the existing planting buckets consistent for removal and save migration.
 	for (auto It = GrowingCrops.CreateIterator(); It; ++It)
 	{
-		const uint8 Stage = PSCropGrowth::GetStage(It.Key(), Now);
-		for (const FIntPoint Cell : It.Value())
+		It.Value().RemoveAll([this](const FIntPoint Cell)
 		{
-			const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
-			const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
-			FPSChunkSaveData* Saved = ModifiedChunks.Find(ChunkCoordinate);
-			if (!Saved || !Saved->Cells.IsValidIndex(Index)) continue;
-			FPSTileCell& Tile = Saved->Cells[Index];
-			if (Tile.CropType == EPSCropType::None || Tile.PlantedHalfHour != It.Key() || Tile.GrowthStage == Stage) continue;
-			Tile.GrowthStage = Stage;
-			if (FPSChunkData* Loaded = LoadedChunks.Find(ChunkCoordinate))
-			{
-				if (Loaded->Cells.IsValidIndex(Index)) Loaded->Cells[Index] = Tile;
-			}
-			ChangedChunks.Add(ChunkCoordinate);
-		}
-		if (Stage == PSCropGrowth::MaxStage) It.RemoveCurrent();
+			return GetCropType(Cell) == EPSCropType::None || GetCropStage(Cell) >= PSCropGrowth::MaxStage;
+		});
+		if (It.Value().IsEmpty()) It.RemoveCurrent();
 	}
 	for (const FIntPoint Chunk : ChangedChunks) RebuildChunk(Chunk);
 	// Save once per clock event, including half-hour progress between visible stages.
@@ -216,6 +251,7 @@ int32 APSGridWorld::GetStoneHealth(const FIntPoint Cell) const
 EPSWorldObjectType APSGridWorld::GetWorldObjectType(const FIntPoint Cell) const
 {
 	if (!IsCellInsideWorld(Cell)) return EPSWorldObjectType::None;
+	if (Gathering && Gathering->HasTree(Cell)) return EPSWorldObjectType::Tree;
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
 	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
@@ -329,7 +365,15 @@ bool APSGridWorld::CanFishFrom(const FIntPoint PlayerCell, const FIntPoint Water
 
 int32 APSGridWorld::GetFishingLocationId(const FIntPoint WaterCell) const
 {
-	return GetGroundTile(WaterCell) == EPSTileType::Water ? static_cast<int32>(FishingLocation) : INDEX_NONE;
+	if (GetGroundTile(WaterCell) != EPSTileType::Water) return INDEX_NONE;
+	const APSFishingWaterRegion* Best = nullptr;
+	const FVector Point = CellToWorldCenter(WaterCell);
+	for (TActorIterator<APSFishingWaterRegion> It(GetWorld()); It; ++It)
+	{
+		if (!It->ContainsWaterPoint(Point, this)) continue;
+		if (!Best || It->Priority > Best->Priority || (It->Priority == Best->Priority && It->GetPathName() < Best->GetPathName())) Best = *It;
+	}
+	return static_cast<int32>(Best ? Best->Location : FishingLocation);
 }
 
 EPSTileInteractionResult APSGridWorld::ShovelCell(const FIntPoint Cell)
@@ -344,9 +388,22 @@ EPSTileInteractionResult APSGridWorld::ShovelCell(const FIntPoint Cell)
 		? EPSTileInteractionResult::GroundChanged : EPSTileInteractionResult::NoEffect;
 }
 
+bool APSGridWorld::CanTillCell(const FIntPoint Cell) const
+{
+	const EPSTileType Ground = GetGroundTile(Cell);
+	return IsCellInsideWorld(Cell) && (Ground == EPSTileType::Grass || Ground == EPSTileType::Dirt)
+		&& GetWorldObjectType(Cell) == EPSWorldObjectType::None && GetCropType(Cell) == EPSCropType::None;
+}
+
+bool APSGridWorld::CanWaterCell(const FIntPoint Cell) const
+{
+	return IsCellInsideWorld(Cell) && GetGroundTile(Cell) == EPSTileType::TilledSoil
+		&& GetWorldObjectType(Cell) == EPSWorldObjectType::None && !IsCellWatered(Cell);
+}
+
 EPSTileInteractionResult APSGridWorld::TillCell(const FIntPoint Cell)
 {
-	if (GetWorldObjectType(Cell) != EPSWorldObjectType::None) return EPSTileInteractionResult::NoEffect;
+	if (GetWorldObjectType(Cell) != EPSWorldObjectType::None || GetCropType(Cell) != EPSCropType::None) return EPSTileInteractionResult::NoEffect;
 	switch (GetGroundTile(Cell))
 	{
 	case EPSTileType::Grass:
@@ -373,6 +430,36 @@ int32 APSGridWorld::GetCropStage(const FIntPoint Cell) const
 	else if (const FPSChunkSaveData* Saved = ModifiedChunks.Find(Chunk)) Cells = &Saved->Cells;
 	return Cells && Cells->IsValidIndex(Index) && (*Cells)[Index].CropType != EPSCropType::None
 		? (*Cells)[Index].GrowthStage : 0;
+}
+
+bool APSGridWorld::IsCellWatered(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell)) return false;
+	const FIntPoint Coordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	const int32 Index = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
+	const FPSChunkSaveData* Saved = ModifiedChunks.Find(Coordinate);
+	return Saved && Saved->Cells.IsValidIndex(Index) && Saved->Cells[Index].GroundType == EPSTileType::TilledSoil
+		&& Saved->Cells[Index].bWatered;
+}
+
+EPSTileInteractionResult APSGridWorld::WaterCell(const FIntPoint Cell)
+{
+	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
+	if (!CanWaterCell(Cell)) return EPSTileInteractionResult::NoEffect;
+	EnsureGrowthUpdates();
+	const FIntPoint Coordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+	FPSChunkData& Chunk = GetOrCreateChunk(Coordinate);
+	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize)];
+	Tile.bWatered = true;
+	Tile.DryDays = 0;
+	Tile.LastFarmDawn = FMath::Max<int64>(0, (GetGrowthHalfHour() - 12) / 48);
+	FPSChunkSaveData& Saved = ModifiedChunks.FindOrAdd(Coordinate);
+	Saved.Coordinate = Coordinate;
+	Saved.Cells = Chunk.Cells;
+	Saved.Veins = Chunk.Veins;
+	RebuildChunk(Coordinate);
+	SaveWorld();
+	return EPSTileInteractionResult::Watered;
 }
 
 EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell, const int32 CropId)
@@ -424,6 +511,7 @@ bool APSGridWorld::ResetWorld()
 	WorldSeed = StartingWorldSeed;
 	GeneratedMiningChunks.Reset();
 	bMiningGenerationReady = false;
+	Gathering->ResetResources();
 
 	// Rebuild existing renderers in place. Destroying and respawning them in the same
 	// frame can leave the deferred old HISM visible after a development reset.
@@ -499,6 +587,12 @@ void APSGridWorld::GenerateEditorPreview()
 			{
 				Tile.Variant = PSWaterAutoTile::SelectVariant(
 					BuildTerrainNeighborMask(Cell, EPSTileType::Water), HashCell(Cell, WorldSeed + 104729));
+				continue;
+			}
+			if (Tile.GroundType == EPSTileType::TilledSoil)
+			{
+				Tile.FarmNeighborMask = BuildTerrainNeighborMask(Cell, EPSTileType::TilledSoil);
+				Tile.Variant = PSFarmAutoTile::SelectExact(Tile.FarmNeighborMask);
 				continue;
 			}
 			if (Tile.GroundType != EPSTileType::Grass && Tile.GroundType != EPSTileType::Dirt) continue;
@@ -621,9 +715,57 @@ bool APSGridWorld::IsDirtPatchCell(const FIntPoint Cell) const
 bool APSGridWorld::BuildStampedCell(const FIntPoint Cell, FPSTileCell& OutCell) const
 {
 	if (!IsCellInsideWorld(Cell)) return false;
+	if (BuildFishingTestPondCell(Cell, OutCell)) return true;
 	for (int32 Index = TileStamps.Num() - 1; Index >= 0; --Index)
 		if (PSTileStamp::BuildCell(TileStamps[Index], Cell, OutCell)) return true;
 	return false;
+}
+
+bool APSGridWorld::BuildFishingTestPondCell(const FIntPoint Cell, FPSTileCell& OutCell) const
+{
+	if (!bEnableFishingTestPond
+		|| static_cast<int64>(FishingTestPondOrigin.X) - 1 < -WorldHalfExtentInCells
+		|| static_cast<int64>(FishingTestPondOrigin.Y) - 1 < -WorldHalfExtentInCells
+		|| static_cast<int64>(FishingTestPondOrigin.X) + 8 >= WorldHalfExtentInCells
+		|| static_cast<int64>(FishingTestPondOrigin.Y) + 8 >= WorldHalfExtentInCells) return false;
+	const int64 X = static_cast<int64>(Cell.X) - FishingTestPondOrigin.X;
+	const int64 Y = static_cast<int64>(Cell.Y) - FishingTestPondOrigin.Y;
+	// A dry one-cell rim keeps neighbouring procedural lakes from joining this pond.
+	if (X < -1 || Y < -1 || X > 8 || Y > 8) return false;
+	const bool bIsland = X >= 3 && X <= 4 && Y >= 3 && Y <= 4;
+	const bool bRim = X == -1 || X == 8 || Y == -1 || Y == 8;
+	OutCell = FPSTileCell();
+	OutCell.GroundType = bIsland || bRim ? EPSTileType::Grass : EPSTileType::Water;
+	return true;
+}
+
+void APSGridWorld::ApplyFishingTestPond()
+{
+	if (!bEnableFishingTestPond) return;
+	TSet<FIntPoint> ChangedChunks;
+	for (int32 Y = -1; Y <= 8; ++Y) for (int32 X = -1; X <= 8; ++X)
+	{
+		const FIntPoint Cell = FishingTestPondOrigin + FIntPoint(X, Y);
+		FPSTileCell PondCell;
+		if (!BuildFishingTestPondCell(Cell, PondCell)) continue;
+		const FIntPoint Coordinate = PSGrid::CellToChunk(Cell, ChunkSize);
+		FPSChunkData& Chunk = GetOrCreateChunk(Coordinate);
+		FPSTileCell& Existing = Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize)];
+		if (Existing.PlantedHalfHour >= 0)
+			if (TArray<FIntPoint>* Bucket = GrowingCrops.Find(Existing.PlantedHalfHour)) Bucket->Remove(Cell);
+		Existing = PondCell;
+		ChangedChunks.Add(Coordinate);
+	}
+	for (const FIntPoint Coordinate : ChangedChunks)
+	{
+		const FPSChunkData& Chunk = LoadedChunks.FindChecked(Coordinate);
+		FPSChunkSaveData& Saved = ModifiedChunks.FindOrAdd(Coordinate);
+		Saved.Coordinate = Coordinate;
+		Saved.Cells = Chunk.Cells;
+		Saved.Veins = Chunk.Veins;
+		RebuildChunk(Coordinate);
+	}
+	if (!ChangedChunks.IsEmpty()) SaveWorld();
 }
 
 void APSGridWorld::AddTileStamp()
@@ -783,6 +925,8 @@ uint32 APSGridWorld::MiningInputsHash() const
 {
 	uint32 Hash = HashCombineFast(GetTypeHash(WorldSeed), GetTypeHash(ChunkSize));
 	Hash = HashCombineFast(Hash, GetTypeHash(WorldHalfExtentInCells));
+	Hash = HashCombineFast(Hash, GetTypeHash(bEnableFishingTestPond));
+	if (bEnableFishingTestPond) Hash = HashCombineFast(Hash, GetTypeHash(FishingTestPondOrigin));
 	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.BaseCell));
 	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.SafeRadius));
 	Hash = HashCombineFast(Hash, GetTypeHash(OreGenerationSettings.bReserveBaseRoutes));
@@ -902,6 +1046,12 @@ FPSChunkData APSGridWorld::BuildRenderChunkData(
 			const FIntPoint Cell(
 				ChunkCoordinate.X * ChunkSize + LocalX,
 				ChunkCoordinate.Y * ChunkSize + LocalY);
+			if (Tile.GroundType == EPSTileType::TilledSoil)
+			{
+				Tile.FarmNeighborMask = BuildTerrainNeighborMask(Cell, EPSTileType::TilledSoil);
+				Tile.Variant = PSFarmAutoTile::SelectExact(Tile.FarmNeighborMask);
+				continue;
+			}
 			if (Tile.GroundType == EPSTileType::Water)
 			{
 				Tile.Variant = PSWaterAutoTile::SelectVariant(
@@ -1041,6 +1191,9 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
 	Tile.GroundType = GroundType;
+	Tile.bWatered = false;
+	Tile.DryDays = 0;
+	Tile.LastFarmDawn = FMath::Max<int64>(0, (GetGrowthHalfHour() - 12) / 48);
 	Tile.bFixedVariant = false;
 	Tile.bWaterArtwork = false;
 	if (GroundType == EPSTileType::Water)
@@ -1077,8 +1230,10 @@ bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType,
 		}
 	}
 	Tile.CropType = CropType;
+	Tile.LastFarmDawn = FMath::Max<int64>(0, (GetGrowthHalfHour() - 12) / 48);
 	Tile.CropId = CropType == EPSCropType::None ? INDEX_NONE : FMath::Max(0, CropId);
 	Tile.GrowthStage = 1;
+	Tile.DryDays = 0;
 	Tile.PlantedHalfHour = CropType == EPSCropType::None ? -1 : GetGrowthHalfHour();
 	if (CropType != EPSCropType::None) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).AddUnique(Cell);
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
@@ -1196,6 +1351,13 @@ void APSGridWorld::LoadWorld()
 				Tile.MineralType = EPSMineralType::None;
 			}
 			if (Tile.CropType == EPSCropType::None) continue;
+			if (SaveGame->DataVersion >= 5)
+			{
+				Tile.GrowthStage = FMath::Clamp<uint8>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage);
+				Tile.DryDays = FMath::Min<uint8>(Tile.DryDays, 1);
+				if (Tile.GrowthStage < PSCropGrowth::MaxStage) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
+				continue;
+			}
 			Tile.CropId = FMath::Max(0, Tile.CropId);
 			const int64 SavedStageAge = (FMath::Clamp<int32>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage) - 1)
 				* PSCropGrowth::HalfHoursPerStage;
@@ -1205,6 +1367,9 @@ void APSGridWorld::LoadWorld()
 			const int64 Age = FMath::Max(SavedStageAge, TimestampAge);
 			Tile.PlantedHalfHour = Now - Age;
 			Tile.GrowthStage = PSCropGrowth::GetStage(Tile.PlantedHalfHour, Now);
+			// Existing crops get one watered day of grace when upgrading the old save.
+			Tile.bWatered = true;
+			Tile.LastFarmDawn = FMath::Max<int64>(0, (Now - 12) / 48);
 			if (Tile.GrowthStage < PSCropGrowth::MaxStage)
 			{
 				GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
@@ -1212,7 +1377,24 @@ void APSGridWorld::LoadWorld()
 		}
 		ModifiedChunks.Add(Chunk.Coordinate, MoveTemp(Restored));
 	}
+	Gathering->Restore(SaveGame->GatheringTrees, SaveGame->GatheringDrops,
+		SaveGame->bGatheringInitialized, SaveGame->bGatheringUnlocked);
 	EnsureGrowthUpdates();
+}
+
+bool APSGridWorld::CanPlaceGatheringTree(const FIntPoint Cell) const
+{
+	if (!IsCellInsideWorld(Cell) || GetWorldObjectType(Cell) != EPSWorldObjectType::None
+		|| GetCropType(Cell) != EPSCropType::None) return false;
+	const EPSTileType Ground = GetGroundTile(Cell);
+	if (Ground != EPSTileType::Grass && Ground != EPSTileType::Dirt) return false;
+	const FIntPoint Delta = Cell - OreGenerationSettings.BaseCell;
+	if (Delta.SizeSquared() <= FMath::Square(OreGenerationSettings.SafeRadius)) return false;
+	if (OreGenerationSettings.bReserveBaseRoutes && (FMath::Abs(Delta.X) <= 1 || FMath::Abs(Delta.Y) <= 1)) return false;
+	for (const auto& Area : OreGenerationSettings.Exclusions)
+		if (Cell.X >= Area.Min.X && Cell.X <= Area.Max.X && Cell.Y >= Area.Min.Y && Cell.Y <= Area.Max.Y) return false;
+	FPSTileCell Stamped;
+	return !BuildStampedCell(Cell, Stamped);
 }
 
 void APSGridWorld::SaveWorld() const
@@ -1226,6 +1408,10 @@ void APSGridWorld::SaveWorld() const
 
 	SaveGame->WorldSeed = WorldSeed;
 	SaveGame->DataVersion = CurrentWorldSaveVersion;
+	SaveGame->GatheringTrees = Gathering->GetRecords();
+	SaveGame->GatheringDrops = Gathering->GetDrops();
+	SaveGame->bGatheringInitialized = Gathering->IsInitialized();
+	SaveGame->bGatheringUnlocked = Gathering->GetSavedUnlocked();
 	if (MiningGenerationVersion > 0) EnsureMiningGeneration();
 	SaveGame->MiningGenerationVersion = MiningGenerationVersion;
 	SaveGame->SavedChunkSize = ChunkSize;

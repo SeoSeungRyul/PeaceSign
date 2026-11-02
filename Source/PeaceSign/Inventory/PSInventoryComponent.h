@@ -91,6 +91,13 @@ private:
 	friend class FPSInventoryPreviewTest;
 	void InitializeDefaults();
 	void NotifyChanged();
+	bool TryGrantPendingUpgradedHoe();
+	bool TryGrantPendingHoeVariant(FName ItemId, int32 PreferredSlot, bool& bPending, EPSItemType Type = EPSItemType::Hoe);
+	UPROPERTY(SaveGame) bool bPendingAxeGrant = false;
+	UPROPERTY(SaveGame)
+	bool bPendingUpgradedHoeGrant = false;
+	UPROPERTY(SaveGame)
+	bool bPendingSecondHoeGrant = false;
 	bool IsAreaSlotUnlocked(EPSInventoryArea Area, int32 Index) const;
 	TArray<FPSItemStack>& GetAreaSlots(EPSInventoryArea Area);
 	const TArray<FPSItemStack>& GetAreaSlots(EPSInventoryArea Area) const;

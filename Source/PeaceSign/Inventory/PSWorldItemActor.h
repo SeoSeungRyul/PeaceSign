@@ -6,6 +6,8 @@
 #include "PSWorldItemActor.generated.h"
 
 class UStaticMeshComponent;
+class UMaterialInterface;
+class UPSGatheringWorldComponent;
 
 UCLASS()
 class PEACESIGN_API APSWorldItemActor : public AActor
@@ -14,10 +16,16 @@ class PEACESIGN_API APSWorldItemActor : public AActor
 public:
 	APSWorldItemActor();
 	void InitializeItem(const FPSItemStack& InItem);
+	void InitializeGatheringItem(const FPSItemStack& InItem, UPSGatheringWorldComponent* World, FGuid Id);
+	virtual void Tick(float DeltaSeconds) override;
 
 private:
 	UFUNCTION() void HandleOverlap(UPrimitiveComponent* Overlapped, AActor* OtherActor,
 		UPrimitiveComponent* OtherComponent, int32 BodyIndex, bool bFromSweep, const FHitResult& Hit);
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> Mesh;
 	UPROPERTY(VisibleAnywhere) FPSItemStack Item;
+	UPROPERTY() TObjectPtr<UMaterialInterface> GatheringMaterial;
+	TWeakObjectPtr<UPSGatheringWorldComponent> GatheringWorld;
+	FGuid GatheringDropId;
+	void TryCollect(AActor* OtherActor);
 };

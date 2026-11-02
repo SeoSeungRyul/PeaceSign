@@ -14,6 +14,7 @@ public class PeaceSign : ModuleRules
 		if (Target.bBuildEditor)
 		{
 			PrivateDependencyModuleNames.Add("UnrealEd");
+			PrivateDependencyModuleNames.Add("UMGEditor");
 		}
 
 		// Uncomment if you are using Slate UI

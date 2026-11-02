@@ -12,6 +12,7 @@
 #include "PSDirtAutoTileSet.h"
 #include "PSWaterAutoTile.h"
 #include "PSCropGrowth.h"
+#include "PSFarmAutoTile.h"
 
 APSTileChunkActor::APSTileChunkActor()
 {
@@ -28,6 +29,8 @@ APSTileChunkActor::APSTileChunkActor()
 
 	TilledSoilInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("TilledSoilInstances"));
 	TilledSoilInstances->SetupAttachment(SceneRoot);
+	WetSoilInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("WetSoilInstances"));
+	WetSoilInstances->SetupAttachment(SceneRoot);
 
 	StoneInstances = CreateDefaultSubobject<UHierarchicalInstancedStaticMeshComponent>(TEXT("StoneInstances"));
 	StoneInstances->SetupAttachment(SceneRoot);
@@ -103,6 +106,16 @@ APSTileChunkActor::APSTileChunkActor()
 		if (DirtPiece.Succeeded()) DefaultDirtVariantTextures[Variant] = DirtPiece.Object;
 	}
 	ConfigureInstances(DirtInstances);
+	FarmTextures.SetNum(PSFarmAutoTile::VariantCount + 1);
+	for (uint8 Variant = 1; Variant <= PSFarmAutoTile::VariantCount; ++Variant)
+	{
+		ConstructorHelpers::FObjectFinder<UTexture2D> Piece(PSFarmAutoTile::GetTexturePath(Variant));
+		if (Piece.Succeeded()) FarmTextures[Variant] = Piece.Object;
+	}
+	static ConstructorHelpers::FObjectFinder<UTexture2D> WetTexture(TEXT("/Game/Art/Tiles/Farm/Farm_Water.Farm_Water"));
+	if (WetTexture.Succeeded()) FarmWaterTexture = WetTexture.Object;
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FarmShader(TEXT("/Game/Art/Tiles/Farm/M_FarmTileUV.M_FarmTileUV"));
+	if (FarmShader.Succeeded()) FarmMaterial = FarmShader.Object;
 	ConfigureInstances(StoneInstances);
 	ConfigureInstances(CopperOreInstances);
 	ConfigureInstances(IronOreInstances);
@@ -113,6 +126,7 @@ APSTileChunkActor::APSTileChunkActor()
 	ConfigureInstances(AsteriumOreInstances);
 	ConfigureInstances(WaterInstances);
 	ConfigureInstances(TilledSoilInstances);
+	ConfigureInstances(WetSoilInstances);
 	ConfigureInstances(SeedInstances);
 	SeedInstances->SetStaticMesh(SeedMesh);
 	for (UHierarchicalInstancedStaticMeshComponent* ObjectInstances : {
@@ -148,6 +162,8 @@ void APSTileChunkActor::Rebuild(
 	AsteriumOreInstances->ClearInstances();
 	WaterInstances->ClearInstances();
 	TilledSoilInstances->ClearInstances();
+	WetSoilInstances->ClearInstances();
+	for (const auto& Pair : FarmVariantInstances) if (Pair.Value) Pair.Value->ClearInstances();
 	SeedInstances->ClearInstances();
 	for (const TPair<uint16, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>& Pair : DirtVariantInstances)
 		if (Pair.Value) Pair.Value->ClearInstances();
@@ -172,9 +188,11 @@ void APSTileChunkActor::Rebuild(
 	TArray<FTransform> AsteriumOreTransforms;
 	TArray<FTransform> WaterTransforms;
 	TArray<FTransform> TilledSoilTransforms;
+	TArray<FTransform> WetSoilTransforms;
 	TArray<FTransform> SeedTransforms;
 	TMap<uint16, TArray<FTransform>> DirtVariantTransforms;
 	TMap<uint8, TArray<FTransform>> WaterVariantTransforms;
+	TMap<uint16, TArray<FTransform>> FarmTransforms;
 	GrassTransforms.Reserve(ChunkData.Cells.Num());
 	DirtTransforms.Reserve(ChunkData.Cells.Num());
 	StoneTransforms.Reserve(ChunkData.Cells.Num());
@@ -209,7 +227,6 @@ void APSTileChunkActor::Rebuild(
 				if (!bUsesDirtVariant) GroundTargetTransforms = &DirtTransforms;
 				break;
 			case EPSTileType::TilledSoil:
-				GroundTargetTransforms = &TilledSoilTransforms;
 				break;
 			case EPSTileType::Stone:
 				// Legacy runtime data still gets a dirt floor below its migrated stone object.
@@ -226,6 +243,29 @@ void APSTileChunkActor::Rebuild(
 				(static_cast<float>(LocalX) + 0.5f) * CellSize,
 				(static_cast<float>(LocalY) + 0.5f) * CellSize,
 				RenderZOffset);
+			if (Cell.GroundType == EPSTileType::TilledSoil)
+			{
+				const uint8 Variant = Cell.Variant > 0 && Cell.Variant <= PSFarmAutoTile::VariantCount
+					? Cell.Variant : PSFarmAutoTile::SelectExact(Cell.FarmNeighborMask);
+				if (Variant && FarmMaterial && FarmTextures[Variant])
+				{
+					FarmTransforms.FindOrAdd(Variant * 5 + 4).Emplace(FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
+				}
+				else if (FarmMaterial)
+				{
+					for (uint8 Corner = 0; Corner < 4; ++Corner)
+					{
+						const uint8 Piece = PSFarmAutoTile::SelectCorner(Cell.FarmNeighborMask, Corner);
+						const FVector Offset((Corner % 2 == 0 ? -0.25f : 0.25f) * CellSize,
+							(Corner < 2 ? -0.25f : 0.25f) * CellSize, 0);
+						FarmTransforms.FindOrAdd(Piece * 5 + Corner).Emplace(FRotator::ZeroRotator, GroundLocation + Offset, FVector(TileScale * 0.5f));
+					}
+				}
+				else TilledSoilTransforms.Emplace(FRotator::ZeroRotator, GroundLocation, FVector(TileScale));
+				if (Cell.bWatered && FarmMaterial && FarmWaterTexture)
+					WetSoilTransforms.Emplace(FRotator::ZeroRotator,
+						GroundLocation + FVector(0, 0, FMath::Max(0.1f, FarmWaterZOffset)), FVector(TileScale));
+			}
 			if (bUsesWaterVariant)
 			{
 				const uint8 TextureVariant = Cell.bFixedVariant
@@ -293,7 +333,11 @@ void APSTileChunkActor::Rebuild(
 	AsteriumOreInstances->AddInstances(AsteriumOreTransforms, false, false, false);
 	WaterInstances->AddInstances(WaterTransforms, false, false, false);
 	TilledSoilInstances->AddInstances(TilledSoilTransforms, false, false, false);
+	WetSoilInstances->AddInstances(WetSoilTransforms, false, false, false);
 	SeedInstances->AddInstances(SeedTransforms, false, false, false);
+	for (const auto& Pair : FarmTransforms)
+		if (auto* Instances = GetOrCreateFarmComponent(Pair.Key / 5, Pair.Key % 5))
+			Instances->AddInstances(Pair.Value, false, false, false);
 	for (const TPair<uint16, TArray<FTransform>>& Pair : DirtVariantTransforms)
 	{
 		UHierarchicalInstancedStaticMeshComponent* Instances = GetOrCreateDirtVariantComponent(Pair.Key);
@@ -305,6 +349,28 @@ void APSTileChunkActor::Rebuild(
 		if (UHierarchicalInstancedStaticMeshComponent* Instances = GetOrCreateWaterVariantComponent(Pair.Key))
 			Instances->AddInstances(Pair.Value, false, false, false);
 	}
+}
+
+UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateFarmComponent(const uint8 Variant, const uint8 Corner)
+{
+	const uint16 Key = Variant * 5 + Corner;
+	if (UHierarchicalInstancedStaticMeshComponent* Existing = FarmVariantInstances.FindRef(Key)) return Existing;
+	if (!FarmMaterial || !FarmTextures.IsValidIndex(Variant) || !FarmTextures[Variant] || Corner > 4) return nullptr;
+	auto* Instances = NewObject<UHierarchicalInstancedStaticMeshComponent>(this,
+		FName(*FString::Printf(TEXT("FarmVariant_%u_%u"), Variant, Corner)), RF_Transient);
+	Instances->SetupAttachment(SceneRoot);
+	ConfigureInstances(Instances);
+	auto* Material = UMaterialInstanceDynamic::Create(FarmMaterial, this);
+	Material->SetTextureParameterValue(TEXT("SpriteTexture"), FarmTextures[Variant]);
+	const float Scale = Corner == 4 ? 1.0f : 0.5f;
+	Material->SetVectorParameterValue(TEXT("UVScale"), FLinearColor(Scale, Scale, 0, 0));
+	Material->SetVectorParameterValue(TEXT("UVOffset"), Corner == 4 ? FLinearColor(0, 0, 0, 0)
+		: FLinearColor((Corner % 2) * 0.5f, (Corner / 2) * 0.5f, 0, 0));
+	Instances->SetMaterial(0, Material);
+	Instances->RegisterComponent();
+	FarmVariantInstances.Add(Key, Instances);
+	FarmVariantMaterials.Add(Key, Material);
+	return Instances;
 }
 
 UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateWaterVariantComponent(const uint8 Variant)
@@ -457,6 +523,7 @@ void APSTileChunkActor::ApplyMaterials()
 		FLinearColor::White,
 		DirtTexture);
 	ApplyMaterial(TilledSoilInstances, TileMesh, DirtMaterial, FLinearColor(0.25f, 0.10f, 0.03f));
+	ApplyMaterial(WetSoilInstances, TileMesh, FarmMaterial, FLinearColor::White, FarmWaterTexture);
 	ApplyMaterial(StoneInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.35f, 0.37f, 0.4f));
 	ApplyMaterial(CopperOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.72f, 0.30f, 0.14f));
 	ApplyMaterial(IronOreInstances, MineableObjectMesh, StoneMaterial, FLinearColor(0.25f, 0.27f, 0.30f));

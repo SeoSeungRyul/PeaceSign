@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "PSUIWidget.h"
 #include "Blueprint/DragDropOperation.h"
 #include "../Inventory/PSInventoryComponent.h"
 #include "PSInventoryWidget.generated.h"
@@ -25,11 +25,11 @@ public:
 
 /** Shared procedural slot; final art can replace its brushes and item textures. */
 UCLASS()
-class PEACESIGN_API UPSInventorySlotWidget : public UUserWidget
+class PEACESIGN_API UPSInventorySlotWidget : public UPSUIWidget
 {
 	GENERATED_BODY()
 public:
-	void Setup(UPSInventoryWidget* InInventory, int32 InIndex);
+	void Setup(UPSInventoryWidget* InInventory, int32 InIndex, bool bInDrawBackground = true);
 protected:
 	virtual int32 NativePaint(const FPaintArgs&, const FGeometry&, const FSlateRect&, FSlateWindowElementList&, int32, const FWidgetStyle&, bool) const override;
 	virtual FReply NativeOnMouseButtonDown(const FGeometry&, const FPointerEvent&) override;
@@ -40,10 +40,11 @@ protected:
 private:
 	UPROPERTY() TObjectPtr<UPSInventoryWidget> Inventory;
 	int32 Index = INDEX_NONE;
+	bool bDrawBackground = true;
 };
 
 UCLASS()
-class PEACESIGN_API UPSInventoryWidget : public UUserWidget
+class PEACESIGN_API UPSInventoryWidget : public UPSUIWidget
 {
 	GENERATED_BODY()
 public:
@@ -62,11 +63,14 @@ public:
 	UPSHotbarWidget* DetachHotbar();
 	bool IsHotbarAttached() const { return HostedHotbar != nullptr; }
 	UFUNCTION(BlueprintCallable, Category="Inventory") void CloseInventory();
+	UFUNCTION(BlueprintCallable, Category="Inventory|Editor") static bool ApplyBookTabArtwork(UObject* Asset);
 	// These brushes accept artist textures in a Widget Blueprint child without changing interaction code.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush SlotBrush;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush SelectedSlotBrush;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") FSlateBrush HoverSlotBrush;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Art") TMap<EPSItemType, TObjectPtr<UTexture2D>> ItemIcons;
+	/** Canvas size used when authoring the nested inventory layout. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Inventory|Layout") FVector2D DesignerReferenceSize = FVector2D(1920, 1080);
 protected:
 	virtual void NativeOnInitialized() override;
 	virtual void NativeConstruct() override;
@@ -74,7 +78,10 @@ protected:
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry&, const FKeyEvent&) override;
 private:
 	friend class FPSInventoryPreviewTest;
+	bool ConnectDesignerLayout();
+	bool bDesignerLayout = false;
 	UFUNCTION() void RefreshInventory();
+	UFUNCTION() void OpenJournal();
 	UPROPERTY(Transient) TObjectPtr<UPSInventoryComponent> InventoryComponent;
 	UPROPERTY() TObjectPtr<USizeBox> HotbarHost;
 	UPROPERTY() TObjectPtr<UPSHotbarWidget> HostedHotbar;

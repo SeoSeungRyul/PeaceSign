@@ -8,7 +8,7 @@
  */
 namespace PSWaterAutoTile
 {
-	constexpr uint8 VariantCount = 69;
+	constexpr uint8 VariantCount = 73;
 	constexpr float ArtworkYaw = 90.0f;
 	PEACESIGN_API uint16 ToTextureMask(uint16 WorldMask);
 	/** Remap an authored source slot to retain its footprint when rotating artwork. */

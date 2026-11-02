@@ -61,6 +61,8 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> TilledSoilInstances;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
+	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> WetSoilInstances;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Tile Chunk")
 	TObjectPtr<UHierarchicalInstancedStaticMeshComponent> SeedInstances;
@@ -94,8 +96,17 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals")
 	float RenderZOffset = 1.0f;
+	/** Water artwork sits exactly one Unreal unit above the farm surface. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals|Farm", meta = (ClampMin = "0.1"))
+	float FarmWaterZOffset = 1.0f;
 
 private:
+	UPROPERTY() TArray<TObjectPtr<UTexture2D>> FarmTextures;
+	UPROPERTY() TObjectPtr<UTexture2D> FarmWaterTexture;
+	UPROPERTY() TObjectPtr<UMaterialInterface> FarmMaterial;
+	UPROPERTY(Transient) TMap<uint16, TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> FarmVariantInstances;
+	UPROPERTY(Transient) TMap<uint16, TObjectPtr<UMaterialInstanceDynamic>> FarmVariantMaterials;
+	UHierarchicalInstancedStaticMeshComponent* GetOrCreateFarmComponent(uint8 Variant, uint8 Corner);
 	UPROPERTY()
 	TArray<TObjectPtr<UTexture2D>> DefaultDirtVariantTextures;
 

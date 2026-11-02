@@ -18,7 +18,7 @@ public:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	UFUNCTION(BlueprintCallable, Category="Fishing|Journal")
-	bool RecordCatch(FName FishId, int32 SizeCm, int32 Quantity = 1);
+	bool RecordCatch(FName FishId, int32 SizeCm, int32 Quantity = 1, int32 SpeciesMaxSize = 0);
 	UFUNCTION(BlueprintPure, Category="Fishing|Journal")
 	FPSFishJournalRecord GetRecord(FName FishId) const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Journal")

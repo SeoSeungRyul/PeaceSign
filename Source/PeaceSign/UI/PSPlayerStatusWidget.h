@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Blueprint/UserWidget.h"
+#include "PSUIWidget.h"
 #include "../PSEquipmentTypes.h"
 #include "PSPlayerStatusWidget.generated.h"
 
@@ -11,12 +11,12 @@ class UTextBlock;
 class UBorder;
 
 UCLASS()
-class PEACESIGN_API UPSPlayerStatusWidget : public UUserWidget
+class PEACESIGN_API UPSPlayerStatusWidget : public UPSUIWidget
 {
 	GENERATED_BODY()
 public:
 	void SetStatsComponent(UPSPlayerStatsComponent* InStats);
-	void SetEquipment(EPSEquipment InEquipment, int32 HotbarSlot = INDEX_NONE, int32 Quantity = 0);
+	void SetEquipment(EPSEquipment InEquipment, int32 HotbarSlot = INDEX_NONE, int32 Quantity = 0, int32 HoeChargeDepth = 0);
 	void SetHarvestedCropCount(int32 Count);
 protected:
 	virtual void NativeOnInitialized() override;

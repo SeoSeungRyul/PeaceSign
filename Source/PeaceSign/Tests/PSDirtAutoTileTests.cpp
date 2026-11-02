@@ -59,10 +59,10 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 		PSDirtAutoTile::SelectDefaultVariant(PSDirtAutoTile::Center, 0), static_cast<uint8>(5));
 	TestEqual(TEXT("Fully surrounded dirt uses Set3 MM"),
 		PSDirtAutoTile::SelectDefaultVariant(511, 0), static_cast<uint8>(23));
-	const uint16 MixedCornerMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270};
+	const uint16 MixedCornerMasks[] = {398, 334, 283, 299, 295, 285, 327, 397, 287, 303, 399, 335, 351, 431, 267, 269, 263, 270, 463, 367, 415, 319};
 	for (int32 I = 0; I < UE_ARRAY_COUNT(MixedCornerMasks); ++I)
 	{
-		TestEqual(TEXT("Mixed straight/inner corner uses its exact Set7-11 artwork"),
+		TestEqual(TEXT("Mixed straight/inner corner uses its exact Set7-12 artwork"),
 			PSDirtAutoTile::SelectDefaultVariant(MixedCornerMasks[I], 1234), uint8(52 + I));
 		TestEqual(TEXT("Mixed corner retains its diagonal, not just cardinal connectivity"),
 			PSDirtAutoTile::GetDefaultVariantMask(uint8(52 + I)), MixedCornerMasks[I]);
@@ -110,6 +110,7 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 	for (uint8 Variant = 1; Variant <= PSDirtAutoTile::VariantCount; ++Variant)
 	{
 		const TCHAR* Path = PSDirtAutoTile::GetDefaultVariantTexturePath(Variant);
+		TestFalse(TEXT("Set13 alternative artwork is not registered in default auto-tiling"), FString(Path).Contains(TEXT("/Set13/")));
 		UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, Path);
 		TestNotNull(TEXT("Every imported dirt texture resolves from its default asset path"), Texture);
 		if (Texture && Variant >= 52)
@@ -209,7 +210,7 @@ bool FPSDirtAutoTileTest::RunTest(const FString& Parameters)
 				const int32 BY = D == 0 ? 143 : D == 2 ? 0 : S;
 				Mismatches += CenterPixels->IsGrass(AX, AY) != Neighbor->IsGrass(BX, BY);
 			}
-			TestTrue(*FString::Printf(TEXT("Set7-11 case %d side %d closes its seam (%d pixels)"), Case, D, Mismatches),
+			TestTrue(*FString::Printf(TEXT("Set7-12 case %d side %d closes its seam (%d pixels)"), Case, D, Mismatches),
 				Mismatches <= 3);
 		}
 		for (int32 Y = 0; Y < CaseSize; ++Y)

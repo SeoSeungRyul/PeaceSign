@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "PaperCharacter.h"
+#include "Fishing/PSFishingTypes.h"
 #include "PSPlayerCharacter.generated.h"
 
 class UPSPlayerStatsComponent;
@@ -23,9 +24,20 @@ class PEACESIGN_API APSPlayerCharacter : public APaperCharacter
 public:
 	APSPlayerCharacter();
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
+	virtual void UnPossessed() override;
 	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
 	UFUNCTION(BlueprintCallable, Category="Movement") void SetMovementLocked(bool bLocked);
 	UFUNCTION(BlueprintPure, Category="Movement") bool IsMovementLocked() const { return bMovementLocked; }
+	UFUNCTION(BlueprintPure, Category="Movement") FIntPoint GetFacingCellOffset() const;
+	/** Plays preparation through the second sprite; zero uses the controller's fallback timer. */
+	float BeginFishingCastPreparation(const FVector& WorldDirection);
+	void UpdateFishingCastPreparation(float ElapsedSeconds);
+	void PlayFishingCastThrow();
+	void EndFishingCastAnimation();
+	float PlayFishingStateAnimation(EPSFishingState State);
+	bool IsFishingStateAnimationPlaying() const;
+	bool IsRolling() const { return bIsRolling; }
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stats")
 	TObjectPtr<UPSPlayerStatsComponent> StatsComponent;
 
@@ -39,6 +51,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<UCameraComponent> Camera;
+	/** Duration of the pan to the bobber and back. Zero switches immediately. Zoom stays unchanged. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing|Camera", meta = (ClampMin = "0.0"))
+	float FishingCameraBlendSeconds = .35f;
 
 	// The pawn owns actions that directly operate the pawn.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")
@@ -67,8 +82,21 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Movement|Roll", meta = (ClampMin = "0.0"))
 	float RollStaminaCost = 30.0f;
+	/** Optional full casting animation: first two keyframes prepare, remaining keyframes throw. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Animation")
+	TObjectPtr<UPaperFlipbook> FishingCastFlipbook;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Animation") TObjectPtr<UPaperFlipbook> FishingPullFlipbook;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Animation") TObjectPtr<UPaperFlipbook> FishingSuccessFlipbook;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Animation") TObjectPtr<UPaperFlipbook> FishingFailureFlipbook;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Animation") TObjectPtr<UPaperFlipbook> FishingRetrieveFlipbook;
 
 private:
+	friend class FPSFishingTest;
+	friend class FPSFishingOct26Test;
+	friend class FPSFishingAnimationTest;
+	friend class FPSFarmToolActionTest;
+	friend class FPSChargedHoeTest;
+	friend class FPSSecondHoeTest;
 	void Move(const FInputActionValue& Value);
 	void StopMoving();
 	void StartRun();
@@ -76,6 +104,7 @@ private:
 	void Roll();
 	void StartRoll(const FVector2D& MovementInput);
 	void TickRoll(float DeltaSeconds);
+	void UpdateFishingCamera(float DeltaSeconds);
 	void SetFacingFromInput(const FVector2D& MovementInput);
 	UPaperFlipbook* CreateIdleFlipbook(UTexture2D* Texture, const FName& ObjectName);
 
@@ -114,6 +143,18 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UPaperFlipbook> RightIdle;
+	UPROPERTY(Transient) TObjectPtr<UPaperFlipbook> ActiveFishingCastFlipbook;
+	UPROPERTY(Transient) TObjectPtr<UPaperFlipbook> BeforeFishingFlipbook;
+	int32 FishingPreparationFrames = 0;
+	bool bFishingAnimationThrown = false;
+	bool bBeforeFishingLooping = true;
+	bool bBeforeFishingPlaying = false;
+	float BeforeFishingPosition = 0;
+	FVector FishingCameraOffset = FVector::ZeroVector;
+	FVector FishingCameraBlendStart = FVector::ZeroVector;
+	float FishingCameraBlendElapsed = 0;
+	bool bHasFishingCameraOffset = false;
+	bool bWasFishingCameraFocused = false;
 
 	bool bWantsToRun = false;
 	bool bMovementLocked = false;

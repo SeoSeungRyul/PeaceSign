@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/SaveGame.h"
 #include "PSTileTypes.h"
+#include "../Gathering/PSGatheringTypes.h"
 #include "PSWorldSaveGame.generated.h"
 
 UCLASS()
@@ -15,6 +16,10 @@ class PEACESIGN_API UPSWorldSaveGame : public USaveGame
 public:
 	UPROPERTY(SaveGame)
 	int32 DataVersion = 0;
+	UPROPERTY(SaveGame) TArray<FPSTreeRecord> GatheringTrees;
+	UPROPERTY(SaveGame) TArray<FPSGatheringDrop> GatheringDrops;
+	UPROPERTY(SaveGame) bool bGatheringInitialized = false;
+	UPROPERTY(SaveGame) bool bGatheringUnlocked = false;
 
 	UPROPERTY(SaveGame)
 	int32 WorldSeed = 1337;

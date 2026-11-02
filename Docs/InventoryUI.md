@@ -1,5 +1,19 @@
 # 인벤토리 데이터와 UI
 
+2026-11-02: 나무 원목 6종과 씨앗 6종은 `DT_Item.IconID` → `DT_GatheringIcon` → `/Game/Art/Gathering/Inventory/T_아이템ID_이름` 순서로 256×256 투명 아이콘을 표시합니다. TestMap의 GridWorld > Gathering > Data > Item Icon Table에 `DT_GatheringIcon`을 연결합니다. 바닥 드롭 수집 시 수종별 ItemId와 수량을 보존해 가방에 넣으며 단축바로 옮겨도 같은 그림을 사용합니다. 가방이 가득 차면 바닥에 남습니다. 사과·밤은 별도 원본 그림이 없어 기존 임시 아이콘을 사용합니다.
+
+아트 연결은 `Scripts/ImportGatheringIcons.py`로 재현합니다. 기존 텍스처·아이콘 행은 보존하며, Item 테이블에서는 원목·씨앗 12행의 IconID만 변경합니다. 원본은 `SourceArt/Gathering/InventoryIcons-256`입니다. 이 아이콘 연결은 씨앗 식재 기능을 추가하지 않습니다. `PeaceSign.Gathering.InventoryIconsAndPickup` 테스트가 6수종의 흔들기·벌목·수집·단축바 이동·저장 복원과 12종 아이콘을 확인합니다.
+
+검증: 에디터 빌드 및 전체 자동화 테스트 29개 성공. `-PSGatheringInventoryRender` 옵션으로 원목 6종을 가방에, 씨앗 6종을 단축바에 넣은 실제 WBP 화면을 1280×800과 1920×1080으로 저장합니다. 검증에서는 에디터의 비동기 텍스처 컴파일을 완료한 뒤 캡처합니다. 실행 기록은 `.codex-tmp/gathering-inventory-tests-final.log`, 가져오기 결과는 `.codex-tmp/gathering-inventory-icons.json`입니다.
+
+2026-10-28: I로 연 인벤토리의 도감 탭에서 새 책 형태 도감으로 접근합니다. F6 도감 단축키는 제거했습니다. 위쪽 활성 탭은 위로 이동하며 인벤토리·도감 전환 동안 같은 일시정지를 유지합니다. 도감에서도 I 또는 Esc는 책 전체를 닫습니다. 기존 가방·장비 배치는 유지하며 자세한 도감 구성은 `EncyclopediaUI.md`를 참고합니다.
+
+2026-10-20: 2차 강화 괭이(`Hoe.Upgrade2`)를 새 게임의 Hotbar 8번 칸에 임시 지급합니다. 기존 저장은 빈 Hotbar 또는 열린 가방 칸에 보충하며, 빈 칸이 없으면 지급 대기를 저장합니다. 짧은 우클릭은 앞 1칸, 0.5초 충전 후 떼면 전방 3×3칸입니다. 아이콘 색과 상태창 이름·사용 안내로 1차와 구분합니다.
+
+2026-10-19: 1차 강화 괭이(`Hoe.Upgrade1`)를 임시 지급합니다. 새 게임의 Hotbar 7번 칸에 배치하고 구버전 저장에서는 7번 칸부터 빈 Hotbar, 열린 가방의 빈 칸 순으로 보충합니다. 기본 괭이는 유지하며 강화 괭이는 이름과 아이콘 색상으로 구분합니다. 충전 조작은 `FarmTools.md`를 참고합니다.
+
+2026-10-13: 임시 물뿌리개를 추가했습니다. 새 게임의 6번 Hotbar 슬롯에 지급하고 구버전 저장에서는 빈 Hotbar 또는 열린 가방 칸에 보충합니다. 물뿌리개로 밭에 우클릭하면 물을 줍니다. 수분·성장·고사 규칙은 `CropGrowth.md`를 참고합니다.
+
 9월 16일 기획서의 가방 배치와 이동 규칙을 적용한 인벤토리입니다.
 화면 아래에는 `1`부터 `0`까지 10칸의 Hotbar가 표시됩니다. 게임에서 I를 누르면 같은 Hotbar가 인벤토리 창 안으로 이동해 가방 슬롯의 바로 윗줄에 놓입니다. I, Esc 또는 닫기 버튼으로 가방을 닫으면 Hotbar는 다시 화면 하단으로 돌아갑니다. 싱글플레이에서는 가방을 열면 일시정지하고, 이 메뉴가 건 일시정지만 닫을 때 해제합니다.
 
@@ -13,10 +27,16 @@ I로 가방을 연 상태에서는 Hotbar와 가방 사이 또는 같은 영역 
 
 ## 아트 교체
 
-`/Game/UI/WBP_Inventory`의 Class Defaults에서 Inventory > Art의 Slot Brush, Selected Slot Brush, Hover Slot Brush에 슬롯 이미지를 지정합니다. Item Icons에 아이템 텍스처를 지정할 수 있습니다. 텍스처가 없으면 코드로 그린 임시 도트 아이콘을 사용합니다. 현재 Hotbar도 같은 방식의 임시 아이콘을 사용합니다. 최종 슬롯 텍스처를 지정하면 기본 슬롯 내부 음영은 생략합니다.
+`/Game/UI/Inventory/WBP_Inventory`의 Class Defaults에서 Item Icons에 아이템 텍스처를 지정할 수 있습니다. 텍스처가 없으면 코드로 그린 임시 도트 아이콘을 사용합니다. 현재 Hotbar도 같은 방식의 임시 아이콘을 사용합니다. Slot Brush, Selected Slot Brush, Hover Slot Brush는 기존 C++ 임시 화면에서 사용하며, 새 디자이너 화면에서는 작가가 배치한 슬롯 그림을 유지합니다.
 
-현재 레이아웃은 C++에서 생성합니다. WBP의 디자이너 배치로 자동 대체되는 구조는 아닙니다. 전체 레이아웃을 아트 시안에 맞게 바꿀 때는 `PSInventoryWidget.cpp`의 레이아웃 생성 부분을 수정하거나 디자이너 기반 위젯으로 이관해야 합니다. 컨트롤러의 Inventory Widget Class로 다른 자식 클래스를 지정할 수 있습니다.
+2026-10-16: `/Game/UI/Inventory/WBP_Inventory`에 디자이너 트리가 있으면 C++에서 덮어쓰지 않고 그대로 사용합니다. 중첩된 `WBP_BagPanel`의 `BagGrid`와 `MiniLine1`을 찾아 기존 줄 이미지 위에 실제 슬롯의 아이콘·수량·내구도·드래그 처리를 겹칩니다. 이름 조회 방식이므로 Is Variable은 필수가 아니지만 해당 위젯 이름은 유지해야 합니다. 원본 WBP 에셋의 그림과 배치는 변경하지 않습니다. 디자이너 트리가 없는 C++ 위젯은 기존 임시 화면으로 동작합니다.
+
+`BagGrid`의 자식은 행 순서가 지정된 줄 Image이며 각 행에 열 개의 실제 슬롯을 올립니다. 행의 최소 높이·Padding과 Scroll Box의 3줄 표시 높이는 디자이너 설정을 유지합니다. 저장 호환성을 위해 가방 최대 50칸을 유지하며, 그림이 4줄이면 마지막 줄 그림을 복제해 실행 중 다섯 번째 줄을 추가합니다. 숨겨진 행은 기존 Scroll Box로 접근합니다. 40칸으로 축소하는 저장 마이그레이션은 하지 않습니다.
+
+`MiniLine1`에는 Hotbar 10칸의 인터랙션을 겹칩니다. 화면 하단에서 사용하던 동일한 Hotbar 데이터 소스를 연결하며 가방을 닫으면 원래 Hotbar가 화면 하단으로 복귀합니다. Hotbar는 Scroll Box 밖에 있어 스크롤하지 않습니다. 장비 패널의 모자·옷·장신구 장착, 도감·설정 탭 기능은 이 연결에 포함되지 않습니다. 컨트롤러의 Inventory Widget Class는 새 경로의 WBP를 지정하며 `Scripts/CreateInventoryWidget.py`로 다시 연결할 수 있습니다.
+
+화면 전체는 실행 시 Size Box와 Scale Box로 감싸며 원본 Canvas는 유지합니다. `Inventory > Layout > Designer Reference Size`의 기본값 1920×1080에서 앵커·좌표를 평가한 뒤 화면에 맞게 함께 축소하므로 고정 좌표 패널이 작은 해상도에서 화면 밖으로 나가지 않습니다. 다른 기준 해상도로 UI를 다시 배치하면 이 값도 맞춰야 합니다.
 
 ## 검증
 
-`PeaceSign.Inventory.DataAndUI` 자동화 테스트는 Hotbar와 가방의 분리, 두 영역 사이 이동·교환·중첩, 가방 우선 획득, 선택한 Hotbar 슬롯의 소비, 잠긴 칸 거부, 이전 저장 데이터 변환, 저장 복원과 수량 보존을 확인합니다. GPU가 있는 실행에 `-PSInventoryRender`를 추가하면 가방 UMG를 Saved/InventoryPreview.png 및 작은 화면 버전으로 렌더링합니다.
+`PeaceSign.Inventory.DataAndUI` 자동화 테스트는 Hotbar와 가방의 분리, 두 영역 사이 이동·교환·중첩, 가방 우선 획득, 선택한 Hotbar 슬롯의 소비, 잠긴 칸 거부, 이전 저장 데이터 변환, 저장 복원과 수량 보존을 확인합니다. 실제 `/Game/UI/Inventory/WBP_Inventory`도 불러와 원본 트리 유지, 중첩 위젯 연결, 가방 50칸과 Hotbar 10칸의 인터랙션 생성을 검증합니다. GPU가 있는 실행에 `-PSInventoryRender`를 추가하면 새 UI를 Saved/InventoryPreview.png 및 작은 화면 버전으로 렌더링하고, 가방의 숨겨진 행으로 스크롤할 수 있는지와 Hotbar 위치 고정도 확인합니다.

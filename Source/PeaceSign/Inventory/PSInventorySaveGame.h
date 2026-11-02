@@ -19,6 +19,11 @@ public:
 	TArray<FPSItemStack> BagSlots;
 	UPROPERTY(SaveGame)
 	int32 UnlockedBagSlotCount = 10;
+	UPROPERTY(SaveGame)
+	bool bPendingUpgradedHoeGrant = false;
+	UPROPERTY(SaveGame)
+	bool bPendingSecondHoeGrant = false;
+	UPROPERTY(SaveGame) bool bPendingAxeGrant = false;
 
 	// Version 0/1 layout: its first ten slots become the hotbar during migration.
 	UPROPERTY(SaveGame)

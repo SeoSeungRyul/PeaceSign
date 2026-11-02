@@ -32,9 +32,10 @@ bool FPSTileExhaustiveTest::RunTest(const FString& Parameters)
 			}
 		};
 		TArray<FTile> Tiles;
-		Tiles.SetNum(70);
+		const uint8 VariantCount = bWater ? PSWaterAutoTile::VariantCount : PSDirtAutoTile::VariantCount;
+		Tiles.SetNum(VariantCount + 1);
 		bool bReadable = true;
-		for (uint8 V = 1; V <= 69; ++V)
+		for (uint8 V = 1; V <= VariantCount; ++V)
 		{
 			UTexture2D* Texture = LoadObject<UTexture2D>(nullptr, bWater
 				? PSWaterAutoTile::GetVariantTexturePath(V) : PSDirtAutoTile::GetDefaultVariantTexturePath(V));
@@ -65,7 +66,7 @@ bool FPSTileExhaustiveTest::RunTest(const FString& Parameters)
 			for (uint32 Seed : {0u, 17u, 1337u})
 			{
 				const uint8 V = Select(Mask, Seed);
-				if (!TestTrue(TEXT("All masks/seeds select a valid texture"), V > 0 && V <= 69)) continue;
+				if (!TestTrue(TEXT("All masks/seeds select a valid texture"), V > 0 && V <= VariantCount)) continue;
 				const uint16 Actual = bWater ? PSWaterAutoTile::GetVariantMask(V) : PSDirtAutoTile::GetDefaultVariantMask(V);
 				if (Mask & 256) TestEqual(TEXT("Cardinal occupancy is preserved for every mask/seed"), Actual & 271, Expected & 271);
 				if (Seed != 0) continue;
@@ -157,6 +158,9 @@ bool FPSTileExhaustiveTest::RunTest(const FString& Parameters)
 		for (uint16 M : MissingList) MissingText += FString::Printf(TEXT("%u "), M);
 		AddInfo(FString::Printf(TEXT("%s: %d normalized land masks, missing [%s], %d/8192 layouts exceed 3-pixel seam tolerance; %d unique pairs; worst %d/144 pixels"),
 			*Name, NormalizedMasks.Num(), *MissingText, BadLayouts, Seams.Num(), WorstMismatch));
+		TestEqual(*FString::Printf(TEXT("%s Set1-12 covers all 47 normalized topologies"), *Name), NormalizedMasks.Num(), 47);
+		TestEqual(*FString::Printf(TEXT("%s needs no missing-topology fallback"), *Name), Missing.Num(), 0);
+		TestEqual(*FString::Printf(TEXT("Every %s adjacency closes within three pixels"), *Name), BadLayouts, 0);
 		Summary += FString::Printf(TEXT("%s,512,%d,%d,8192,%d,%d,%d\n"), *Name, NormalizedMasks.Num(), Missing.Num(), BadLayouts, Seams.Num(), WorstMismatch);
 		TestTrue(TEXT("Coverage CSV exported"), FFileHelper::SaveStringToFile(Coverage, *(Dir / (Name + TEXT("Coverage.csv")))));
 		TestTrue(TEXT("Seam CSV exported"), FFileHelper::SaveStringToFile(SeamCsv, *(Dir / (Name + TEXT("Seams.csv")))));

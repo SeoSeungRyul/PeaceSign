@@ -1,10 +1,12 @@
 #include "PSInventoryComponent.h"
+#include "../Data/PSGameDataTables.h"
+#include "../Gathering/PSGatheringTypes.h"
 #include "PSInventorySaveGame.h"
 #include "Kismet/GameplayStatics.h"
 
 namespace
 {
-	constexpr int32 CurrentInventorySaveVersion = 5;
+	constexpr int32 CurrentInventorySaveVersion = 9;
 
 	bool UsesCropId(const EPSItemType ItemType)
 	{
@@ -37,6 +39,7 @@ namespace
 			{
 				Slot.CropId = NormalizeCropId(Slot.ItemType, Slot.CropId);
 				if (Slot.ItemId.IsNone()) Slot.ItemId = PSItems::GetDefaultItemId(Slot.ItemType);
+				Slot.ItemId = UPSGameDataLibrary::CanonicalItemID(Slot.ItemId);
 				const FPSItemDefinition& Definition = PSItems::GetDefinition(Slot);
 				Slot.Quantity = FMath::Min(Slot.Quantity, Definition.MaxStack);
 				if (Definition.bInfiniteDurability) Slot.CurrentDurability = INDEX_NONE;
@@ -144,6 +147,7 @@ bool UPSInventoryComponent::CanAddItemVariant(const EPSItemType ItemType, FName 
 {
 	if (!PSItems::IsValid(ItemType) || Quantity <= 0) return false;
 	if (ItemId.IsNone()) ItemId = PSItems::GetDefaultItemId(ItemType);
+	ItemId = UPSGameDataLibrary::CanonicalItemID(ItemId);
 	int64 Capacity = 0;
 	const FPSItemDefinition& Definition = PSItems::GetDefinition(ItemType, ItemId);
 	const int32 MaxStack = Definition.MaxStack;
@@ -170,6 +174,7 @@ bool UPSInventoryComponent::AddItemVariant(const EPSItemType ItemType, FName Ite
 	const int32 CropId, int32 CurrentDurability)
 {
 	if (ItemId.IsNone()) ItemId = PSItems::GetDefaultItemId(ItemType);
+	ItemId = UPSGameDataLibrary::CanonicalItemID(ItemId);
 	const FPSItemDefinition& Definition = PSItems::GetDefinition(ItemType, ItemId);
 	CurrentDurability = Definition.bInfiniteDurability || Definition.MaxDurability <= 0
 		? INDEX_NONE : FMath::Clamp(CurrentDurability < 0 ? Definition.MaxDurability : CurrentDurability, 1, Definition.MaxDurability);
@@ -343,6 +348,8 @@ void UPSInventoryComponent::ResetToDefaults()
 
 void UPSInventoryComponent::InitializeDefaults()
 {
+	bPendingUpgradedHoeGrant = false;
+	bPendingSecondHoeGrant = false;
 	HotbarSlots.SetNum(HotbarSlotCount);
 	BagSlots.SetNum(MaxBagSlotCount);
 	for (FPSItemStack& Slot : HotbarSlots) Slot.Clear();
@@ -365,10 +372,23 @@ void UPSInventoryComponent::InitializeDefaults()
 	HotbarSlots[4].ItemType = EPSItemType::Shovel;
 	HotbarSlots[4].Quantity = 1;
 	HotbarSlots[4].CurrentDurability = PSItems::GetDefinition(HotbarSlots[4]).MaxDurability;
+	HotbarSlots[5].ItemType = EPSItemType::WateringCan;
+	HotbarSlots[5].Quantity = 1;
+	HotbarSlots[6].ItemType = EPSItemType::Hoe;
+	HotbarSlots[6].ItemId = PSItemIds::UpgradedHoe;
+	HotbarSlots[6].Quantity = 1;
+	HotbarSlots[6].CurrentDurability = PSItems::GetDefinition(HotbarSlots[6]).MaxDurability;
+	HotbarSlots[7].ItemType = EPSItemType::Hoe;
+	HotbarSlots[7].ItemId = PSItemIds::SecondUpgradedHoe;
+	HotbarSlots[7].Quantity = 1;
+	HotbarSlots[7].CurrentDurability = PSItems::GetDefinition(HotbarSlots[7]).MaxDurability;
+	bPendingAxeGrant = true;
+	TryGrantPendingHoeVariant(PSGathering::AxeId(1), 8, bPendingAxeGrant, EPSItemType::Axe);
 }
 
 void UPSInventoryComponent::NotifyChanged()
 {
+	TryGrantPendingUpgradedHoe();
 	if (bAutoSave) SaveInventory();
 	OnInventoryChanged.Broadcast();
 }
@@ -384,6 +404,9 @@ bool UPSInventoryComponent::SaveInventory() const
 	Save->HotbarSlots = HotbarSlots;
 	Save->BagSlots = BagSlots;
 	Save->UnlockedBagSlotCount = UnlockedBagSlotCount;
+	Save->bPendingUpgradedHoeGrant = bPendingUpgradedHoeGrant;
+	Save->bPendingSecondHoeGrant = bPendingSecondHoeGrant;
+	Save->bPendingAxeGrant = bPendingAxeGrant;
 	return UGameplayStatics::SaveGameToSlot(Save, SaveSlotName, 0);
 }
 
@@ -493,7 +516,70 @@ bool UPSInventoryComponent::LoadInventory()
 			UE_LOG(LogTemp, Warning, TEXT("Starter shovel could not be added because every inventory slot is full."));
 	}
 	if (bLegacyDurability) bMigrated = true;
+	if (Save->DataVersion < 6 && CountItem(EPSItemType::WateringCan) == 0)
+	{
+		bool bAdded = false;
+		for (int32 Offset = 0; Offset < HotbarSlotCount; ++Offset)
+		{
+			FPSItemStack& Target = HotbarSlots[(5 + Offset) % HotbarSlotCount];
+			if (!Target.IsEmpty()) continue;
+			Target.ItemType = EPSItemType::WateringCan;
+			Target.Quantity = 1;
+			bAdded = true;
+			break;
+		}
+		if (!bAdded)
+			for (int32 Index = 0; Index < UnlockedBagSlotCount; ++Index)
+			{
+				if (!BagSlots[Index].IsEmpty()) continue;
+				BagSlots[Index].ItemType = EPSItemType::WateringCan;
+				BagSlots[Index].Quantity = 1;
+				bAdded = true;
+				break;
+			}
+		bMigrated |= bAdded;
+		if (!bAdded) UE_LOG(LogTemp, Warning, TEXT("No free slot for starter watering can."));
+	}
+	bPendingUpgradedHoeGrant = Save->DataVersion < 7 || Save->bPendingUpgradedHoeGrant;
+	bPendingSecondHoeGrant = Save->DataVersion < 8 || Save->bPendingSecondHoeGrant;
+	bPendingAxeGrant = Save->DataVersion < 9 || Save->bPendingAxeGrant;
+	const bool bGranted = TryGrantPendingUpgradedHoe();
+	bMigrated |= bGranted || Save->DataVersion < CurrentInventorySaveVersion
+		|| bPendingUpgradedHoeGrant != Save->bPendingUpgradedHoeGrant || bPendingSecondHoeGrant != Save->bPendingSecondHoeGrant;
 	if (bMigrated && bAutoSave) SaveInventory();
 	OnInventoryChanged.Broadcast();
+	return true;
+}
+
+bool UPSInventoryComponent::TryGrantPendingUpgradedHoe()
+{
+	const bool bFirstGranted = TryGrantPendingHoeVariant(PSItemIds::UpgradedHoe, 6, bPendingUpgradedHoeGrant);
+	const bool bSecondGranted = TryGrantPendingHoeVariant(PSItemIds::SecondUpgradedHoe, 7, bPendingSecondHoeGrant);
+	const bool bAxeGranted = TryGrantPendingHoeVariant(PSGathering::AxeId(1), 8, bPendingAxeGrant, EPSItemType::Axe);
+	return bFirstGranted || bSecondGranted || bAxeGranted;
+}
+
+bool UPSInventoryComponent::TryGrantPendingHoeVariant(const FName ItemId, const int32 PreferredSlot, bool& bPending, const EPSItemType Type)
+{
+	if (!bPending) return false;
+	const auto IsUpgradedHoe = [ItemId, Type](const FPSItemStack& Item)
+	{
+		return !Item.IsEmpty() && Item.ItemType == Type && Item.ItemId == ItemId;
+	};
+	bool bOwned = HotbarSlots.ContainsByPredicate(IsUpgradedHoe);
+	for (int32 Index = 0; !bOwned && Index < UnlockedBagSlotCount; ++Index) bOwned = IsUpgradedHoe(BagSlots[Index]);
+	if (bOwned) { bPending = false; return false; }
+	FPSItemStack* Target = nullptr;
+	for (int32 Offset = 0; !Target && Offset < HotbarSlots.Num(); ++Offset)
+		if (HotbarSlots[(PreferredSlot + Offset) % HotbarSlotCount].IsEmpty()) Target = &HotbarSlots[(PreferredSlot + Offset) % HotbarSlotCount];
+	for (int32 Index = 0; !Target && Index < UnlockedBagSlotCount && BagSlots.IsValidIndex(Index); ++Index)
+		if (BagSlots[Index].IsEmpty()) Target = &BagSlots[Index];
+	if (!Target) return false; // Preserve the pending grant across saves until space is available.
+	Target->Clear();
+	Target->ItemType = Type;
+	Target->ItemId = ItemId;
+	Target->Quantity = 1;
+	Target->CurrentDurability = PSItems::GetDefinition(*Target).MaxDurability;
+	bPending = false;
 	return true;
 }
