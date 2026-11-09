@@ -10,6 +10,28 @@
 #include "Components/CanvasPanelSlot.h"
 #endif
 
+bool UPSFishingWidget::RemoveBiteInputHint(UObject* Asset)
+{
+#if WITH_EDITOR
+	auto* Blueprint = Cast<UWidgetBlueprint>(Asset);
+	if (!Blueprint || !Blueprint->ParentClass || !Blueprint->ParentClass->IsChildOf(StaticClass()) || !Blueprint->WidgetTree) return false;
+	UWidget* Hint = Blueprint->WidgetTree->FindWidget(TEXT("BiteActionLabel"));
+	if (!Hint) return true;
+	auto* Bite = Cast<UBorder>(Blueprint->WidgetTree->FindWidget(TEXT("FishBitePanel")));
+	bool bInsideBite = false;
+	for (UWidget* Parent = Hint->GetParent(); Parent; Parent = Parent->GetParent()) bInsideBite |= Parent == Bite;
+	if (!Bite || !bInsideBite) return false;
+	UWidget* Target = Hint;
+	// Remove the small hint's background only when it contains nothing else.
+	if (auto* Canvas = Cast<UCanvasPanel>(Hint->GetParent()); Canvas && Canvas->GetChildrenCount() == 1)
+		if (auto* Border = Cast<UBorder>(Canvas->GetParent()); Border && Border->GetParent() == Bite->GetContent()) Target = Border;
+	FText Error;
+	return FWidgetBlueprintOperationUtils::RemoveWidget(Blueprint, Target, Error);
+#else
+	return false;
+#endif
+}
+
 bool UPSFishingWidget::AddFishPanelPrefixes(UObject* Asset)
 {
 #if WITH_EDITOR

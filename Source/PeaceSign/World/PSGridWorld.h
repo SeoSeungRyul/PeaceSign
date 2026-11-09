@@ -12,6 +12,11 @@ class APSTileChunkActor;
 class UPSGameTimeSubsystem;
 class UPSDirtAutoTileSet;
 class UPSGatheringWorldComponent;
+class UPSBushWorldComponent;
+class USkyLightComponent;
+class UTextureCube;
+class UDataTable;
+struct FPSCropDefinition;
 
 UCLASS()
 class PEACESIGN_API APSGridWorld : public AActor
@@ -23,6 +28,8 @@ public:
 	static constexpr int32 DefaultStoneHealth = 30;
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Gathering")
 	TObjectPtr<UPSGatheringWorldComponent> Gathering;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Gathering")
+	TObjectPtr<UPSBushWorldComponent> Bushes;
 	bool CanPlaceGatheringTree(FIntPoint Cell) const;
 	int32 GetGatheringSeed() const { return WorldSeed; }
 	void SaveGatheringState() const { SaveWorld(); }
@@ -34,6 +41,11 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	FVector CellToWorldCenter(FIntPoint Cell) const;
+	UFUNCTION(BlueprintPure, Category="Grid World|Water") FVector WaterVisualLocation(FIntPoint Cell) const;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Grid World|Water") bool bUseNativeWater = true;
+	/** Temporarily supply the second water's daylight reflections; restore when disabled. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Grid World|Water") bool bSupplyNativeWaterReflections = true;
+	UFUNCTION(BlueprintCallable, CallInEditor, Category="Grid World|Water") void RefreshWaterRendering();
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	EPSTileType GetGroundTile(FIntPoint Cell) const;
@@ -73,6 +85,9 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Grid World")
 	int32 GetCropStage(FIntPoint Cell) const;
+	const FPSCropDefinition* FindCropDefinition(int32 CropId) const;
+	double GetCropPlantingMinute(FIntPoint Cell) const;
+	double GetCropGrowthMinutes(FIntPoint Cell) const;
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult TillCell(FIntPoint Cell);
@@ -92,6 +107,7 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult HarvestCrop(FIntPoint Cell);
+	EPSTileInteractionResult HarvestCropForPlayer(FIntPoint Cell);
 
 	UFUNCTION(BlueprintCallable, Category = "Grid World")
 	EPSTileInteractionResult RemoveCrop(FIntPoint Cell);
@@ -180,9 +196,15 @@ protected:
 #endif
 
 private:
+	UPROPERTY(Transient) TObjectPtr<USkyLightComponent> NativeWaterReflections;
+	UPROPERTY() TObjectPtr<UTextureCube> NativeWaterReflectionCube;
+	void UpdateWaterLighting();
 	friend class FPSGatheringTest;
+	friend class FPSBushTest;
 	friend class FPSGameDataTablesTest;
 	friend class FPSGatheringInventoryTest;
+	friend class FPSPlacedTreeSpriteTest;
+	friend class FPSWorldResetInventoryTest;
 	friend class FPSDirtAutoTileTest;
 	friend class FPSTileStampTest;
 	friend class FPSShovelTest;
@@ -209,10 +231,14 @@ private:
 	void ApplyFishingTestPond();
 	void EnsureGrowthUpdates();
 	UFUNCTION() void HandleClockChanged();
+	UFUNCTION() void HandleFarmGrowthChanged();
+	void AdvanceFarmGrowth(double ToMinute);
+	double GetFarmMinute() const;
 	int64 GetGrowthHalfHour() const;
 	UPROPERTY(Transient) TObjectPtr<UPSGameTimeSubsystem> GrowthClock;
-	// Mature crops are omitted. A timestamp bucket shares one growth calculation.
-	TMap<int64, TArray<FIntPoint>> GrowingCrops;
+	UPROPERTY(EditDefaultsOnly, Category="Farming")
+	TSoftObjectPtr<UDataTable> CropDataTable{FSoftObjectPath(TEXT("/Game/DataBase/DT_Crop.DT_Crop"))};
+	double FarmGrowthMinute = -1;
 	EPSTileType GenerateGroundTile(FIntPoint Cell) const;
 	EPSWorldObjectType GenerateWorldObjectType(FIntPoint Cell) const;
 	EPSMineralType GenerateMineralType(FIntPoint Cell) const;
@@ -226,7 +252,8 @@ private:
 	void RebuildChunk(FIntPoint ChunkCoordinate);
 	void RebuildChunksAroundCell(FIntPoint Cell);
 	bool SetGroundTile(FIntPoint Cell, EPSTileType GroundType);
-	bool SetCropType(FIntPoint Cell, EPSCropType CropType, int32 CropId = -1);
+	bool SetCropType(FIntPoint Cell, EPSCropType CropType, int32 CropId = -1, bool bSave = true);
+	const FPSTileCell* FindSavedFarmTile(FIntPoint Cell) const;
 	bool IsCellInsideWorld(FIntPoint Cell) const;
 	void LoadWorld();
 	void SaveWorld() const;

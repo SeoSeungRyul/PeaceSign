@@ -35,9 +35,19 @@ bool FPSCropGrowthTest::RunTest(const FString& Parameters)
 	Grid->PlantSeed(Cells[0]);
 	Grid->PlantSeed(Cells[1]);
 	Grid->WaterCell(Cells[0]);
-	Clock->AdvanceGameHours(23);
+	Clock->Tick(9.f);
+	TestEqual(TEXT("Farm waits for the ten-minute boundary"), Grid->GetCropGrowthMinutes(Cells[0]), 0.0);
+	Clock->Tick(1.f);
+	TestEqual(TEXT("Ten game minutes accrue on wet crops"), Grid->GetCropGrowthMinutes(Cells[0]), 10.0);
+	Clock->Tick(22 * 60 + 50.f);
 	TestTrue(TEXT("Wet soil persists through midnight"), Grid->IsCellWatered(Cells[0]));
-	TestEqual(TEXT("No growth before dawn"), Grid->GetCropStage(Cells[0]), 1);
+	TestEqual(TEXT("Crop can reach stage two before dawn"), Grid->GetCropStage(Cells[0]), 2);
+	const auto* AutoSave = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(SaveSlot, 0));
+	if (TestNotNull(TEXT("The clock still saves at half-hour updates"), AutoSave))
+	{
+		TestEqual(TEXT("The saved clock matches the current half hour"), AutoSave->SavedClockHalfHour, Clock->GetHalfHourIndex());
+		TestEqual(TEXT("The clock saves after processing crop growth"), AutoSave->FarmGrowthMinute, Clock->GetAbsoluteGameMinute());
+	}
 	Clock->AdvanceGameHours(1);
 	TestEqual(TEXT("Watered crop grows at six"), Grid->GetCropStage(Cells[0]), 2);
 	TestEqual(TEXT("Dry crop pauses"), Grid->GetCropStage(Cells[1]), 1);
@@ -48,10 +58,11 @@ bool FPSCropGrowthTest::RunTest(const FString& Parameters)
 	Clock->AdvanceGameDays(1);
 	TestTrue(TEXT("Daily growth does not load invisible chunks"), Grid->LoadedChunks.IsEmpty());
 	TestEqual(TEXT("Watered unloaded crop grows"), Grid->GetCropStage(Cells[0]), 3);
-	TestEqual(TEXT("Second dry dawn kills crop"), Grid->GetCropType(Cells[1]), EPSCropType::None);
+	TestEqual(TEXT("First dawn is exempt and one dry day does not kill crop"), Grid->GetCropType(Cells[1]), EPSCropType::TestCrop);
+	for (int32 Day = 0; Day < 2; ++Day) { Grid->WaterCell(Cells[0]); Clock->AdvanceGameDays(1); }
+	TestEqual(TEXT("Two counted dry days kill crop"), Grid->GetCropType(Cells[1]), EPSCropType::None);
 	TestEqual(TEXT("Dead crop leaves tilled soil"), Grid->GetGroundTile(Cells[1]), EPSTileType::TilledSoil);
 	TestEqual(TEXT("Dead crop cannot be harvested"), Grid->HarvestCrop(Cells[1]), EPSTileInteractionResult::NoEffect);
-	for (int32 Day = 0; Day < 2; ++Day) { Grid->WaterCell(Cells[0]); Clock->AdvanceGameDays(1); }
 	TestEqual(TEXT("Four watered days reaches maturity"), Grid->GetCropStage(Cells[0]), 5);
 	TestEqual(TEXT("Mature harvest succeeds"), Grid->HarvestCrop(Cells[0]), EPSTileInteractionResult::Harvested);
 	Grid->PlantSeed(Cells[0]);
@@ -77,7 +88,7 @@ bool FPSCropGrowthTest::RunTest(const FString& Parameters)
 	Clock->AdvanceGameDays(28);
 	TestEqual(TEXT("Long skip processes wet first day and dry days"), Grid->GetCropType(Cells[0]), EPSCropType::None);
 	TestFalse(TEXT("Long skip clears moisture"), Grid->IsCellWatered(Cells[0]));
-	TestTrue(TEXT("Dead crops leave scheduler"), Grid->GrowingCrops.IsEmpty());
+	TestEqual(TEXT("Dead crops clear accumulated growth"), Grid->GetCropGrowthMinutes(Cells[0]), 0.0);
 	APSTileChunkActor* Renderer = World->SpawnActor<APSTileChunkActor>();
 	FPSChunkData RenderData;
 	RenderData.Cells.SetNum(4);
@@ -112,7 +123,7 @@ bool FPSCropGrowthTest::RunTest(const FString& Parameters)
 	Clock->AdvanceGameDays(1);
 	TestEqual(TEXT("Migrated crop continues growing"), Grid->GetCropStage(FIntPoint::ZeroValue), 4);
 	Grid->ResetWorld();
-	TestTrue(TEXT("Reset clears scheduler"), Grid->GrowingCrops.IsEmpty());
+	TestEqual(TEXT("Reset clears crop"), Grid->GetCropType(FIntPoint::ZeroValue), EPSCropType::None);
 	World->DestroyWorld(false);
 	UGameplayStatics::DeleteGameInSlot(SaveSlot, 0);
 	return true;

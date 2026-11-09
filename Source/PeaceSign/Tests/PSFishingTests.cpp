@@ -360,14 +360,32 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 		Grid->CellToWorldCenter(Controller->FishingCell.GetValue()) + FVector(0, 0, 8));
 	const FVector FocusDelta = FocusLocation - Character->GetActorLocation();
 	const FVector FocusedCameraLocation = OriginalCameraView.Location + FVector(FocusDelta.X, FocusDelta.Y, 0);
-	const FMinimalViewInfo PartialCameraView = CameraView(.1f);
+	const float CameraBlendSeconds = Character->GetFishingCameraBlendSeconds();
+	TestTrue(TEXT("Gameplay Blueprint uses the slower fishing camera transition"), CameraBlendSeconds >= 1.f);
+	const float CameraStep = CameraBlendSeconds / 10;
+	const FMinimalViewInfo PartialCameraView = CameraView(CameraStep);
 	TestFalse(TEXT("Rendered camera pans rather than jumping instantly"), PartialCameraView.Location.Equals(OriginalCameraView.Location));
-	TestFalse(TEXT("Rendered camera has not completed its blend after 0.1 seconds"), PartialCameraView.Location.Equals(FocusedCameraLocation));
+	TestFalse(TEXT("Rendered camera has not completed its blend after the first tenth"), PartialCameraView.Location.Equals(FocusedCameraLocation));
 	APlayerState* CameraPauser = World->SpawnActor<APlayerState>();
 	World->GetWorldSettings()->SetPauserPlayerState(CameraPauser);
 	TestEqual(TEXT("Pause freezes the rendered fishing camera pan"), CameraView(1.f).Location, PartialCameraView.Location);
 	World->GetWorldSettings()->SetPauserPlayerState(nullptr);
-	TestTrue(TEXT("The rendered Blueprint camera reaches the bobber while movement is locked"), CameraView(.3f).Location.Equals(FocusedCameraLocation, .1f));
+	const double DepartureStep = FVector::Dist(PartialCameraView.Location, OriginalCameraView.Location);
+	double MiddleStep = 0, ArrivalStep = 0;
+	FVector PreviousCamera = PartialCameraView.Location;
+	FMinimalViewInfo FocusedView;
+	for (int32 Step = 2; Step <= 10; ++Step)
+	{
+		FocusedView = CameraView(CameraStep);
+		const double Distance = FVector::Dist(FocusedView.Location, PreviousCamera);
+		if (Step == 5) MiddleStep = Distance;
+		if (Step == 10) ArrivalStep = Distance;
+		if (Step == 3) TestFalse(TEXT("Camera remains in transition after the old 0.35-second duration"), FocusedView.Location.Equals(FocusedCameraLocation, .1f));
+		PreviousCamera = FocusedView.Location;
+	}
+	TestTrue(TEXT("Camera accelerates after a gentle departure"), MiddleStep > DepartureStep * 2);
+	TestTrue(TEXT("Camera decelerates for a gentle arrival"), ArrivalStep * 2 < MiddleStep);
+	TestTrue(TEXT("The rendered Blueprint camera reaches the bobber while movement is locked"), FocusedView.Location.Equals(FocusedCameraLocation, .1f));
 	const FSceneViewProjectionData FishingProjection = ProjectCamera(CameraView(0));
 	TestTrue(TEXT("Final orthographic projection preserves the camera pan instead of snapping to the pawn"),
 		FVector2D(FishingProjection.ViewOrigin - OriginalProjection.ViewOrigin).Equals(FVector2D(FocusDelta), .1f));
@@ -389,11 +407,11 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->UpdateFishing(.4f);
 	TestFalse(TEXT("Movement cancellation unlocks the character"), Character->IsMovementLocked());
 	TestFalse(TEXT("Cancellation clears the bobber anchor"), Controller->GetFishingFocusLocation(FocusLocation));
-	TestEqual(TEXT("Cancellation restores the actual original view"), CameraView(.4f).Location, OriginalCameraView.Location);
+	TestEqual(TEXT("Cancellation restores the actual original view"), CameraView(CameraBlendSeconds).Location, OriginalCameraView.Location);
 	TestTrue(TEXT("Cancellation restores the final projected view"),
 		FVector2D(ProjectCamera(CameraView(0)).ViewOrigin).Equals(FVector2D(OriginalProjection.ViewOrigin), .1f));
 	TestTrue(TEXT("Character can cast again after moving"), StartCast(Water));
-	CameraView(.4f);
+	CameraView(CameraBlendSeconds);
 	Controller->BeginFishingBite();
 	Controller->BeginFishingMinigame();
 	TestFalse(TEXT("Movement cancellation does not consume minigame direction input"), Controller->CancelFishingForMovementInput());
@@ -402,16 +420,16 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	Controller->SubmitFishingDirection(EPSFishingDirection::Up);
 	TestTrue(TEXT("Success keeps movement locked during result motion"), Character->IsMovementLocked());
 	TestFalse(TEXT("Success immediately starts returning from the bobber"), Controller->GetFishingFocusLocation(FocusLocation));
-	TestEqual(TEXT("Rendered camera returns during the locked success animation"), CameraView(.4f).Location, OriginalCameraView.Location);
+	TestEqual(TEXT("Rendered camera returns during the locked success animation"), CameraView(CameraBlendSeconds).Location, OriginalCameraView.Location);
 	Controller->UpdateFishing(2.0f);
 	TestFalse(TEXT("Success result completion unlocks movement"), Character->IsMovementLocked());
 	TestTrue(TEXT("Character can cast after success"), StartCast(Water));
-	CameraView(.4f);
+	CameraView(CameraBlendSeconds);
 	Controller->BeginFishingBite();
 	Controller->CompleteFishing(false);
 	TestFalse(TEXT("Failure unlocks movement immediately"), Character->IsMovementLocked());
 	TestFalse(TEXT("Failure clears the camera and UI anchor"), Controller->GetFishingFocusLocation(FocusLocation));
-	TestEqual(TEXT("Failure restores the actual camera view"), CameraView(.4f).Location, OriginalCameraView.Location);
+	TestEqual(TEXT("Failure restores the actual camera view"), CameraView(CameraBlendSeconds).Location, OriginalCameraView.Location);
 	Controller->UpdateFishing(2.0f);
 	TestTrue(TEXT("Camera interruption fixture can cast"), StartCast(Water));
 	CameraView(.1f);
@@ -432,13 +450,15 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Zero blend duration actually moves the rendered view"), InstantViewLocation.Equals(OriginalCameraView.Location));
 	Controller->StopFishing();
 	TestEqual(TEXT("Zero blend duration immediately restores the rendered view"), CameraView(0).Location, OriginalCameraView.Location);
-	Character->FishingCameraBlendSeconds = .35f;
+	Character->FishingCameraBlendSeconds = CameraBlendSeconds;
 
 	const int32 ExistingFish = Controller->InventoryComponent->CountItem(EPSItemType::Fish);
 	TestTrue(TEXT("Fish stack can be filled"), Controller->InventoryComponent->AddItemVariant(
 		EPSItemType::Fish, Controller->GetCurrentFishId(), 999 - ExistingFish));
-	for (int32 Variant = 0; Variant < 9; ++Variant)
-		TestTrue(TEXT("Remaining bag slots can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::TestSeed, 999, Variant));
+	int32 EmptySlots = 0;
+	for (int32 Slot = 0; Slot < Controller->InventoryComponent->GetUnlockedBagSlotCount(); ++Slot)
+		if (Controller->InventoryComponent->GetBagSlot(Slot).IsEmpty()) ++EmptySlots;
+	TestTrue(TEXT("Remaining bag slots can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::Stone, EmptySlots * 999));
 	int32 DropsBefore = 0;
 	for (TActorIterator<APSWorldItemActor> It(World); It; ++It) ++DropsBefore;
 	TestTrue(TEXT("Can cast with a full bag"), StartCast(Water));
@@ -807,6 +827,8 @@ bool FPSFishingTest::RunTest(const FString& Parameters)
 		Preview(TEXT("Casting"));
 		FishingUI->Refresh(EPSFishingState::BiteWindow, 5, 5, {}, 0, FText::GetEmpty(), 0, nullptr);
 		TestEqual(TEXT("Bite shows the yellow exclamation bubble"), FishingUI->FishBitePanel->GetVisibility(), ESlateVisibility::HitTestInvisible);
+		TestNull(TEXT("Bite input hint is removed from the saved Designer layout"), FishingUI->WidgetTree->FindWidget(TEXT("BiteActionLabel")));
+		TestNotNull(TEXT("Bite retains the supplied exclamation artwork"), FishingUI->WidgetTree->FindWidget(TEXT("BiteBubbleArtwork")));
 		TestEqual(TEXT("Bite reaction has no waiting countdown bar"), FishingUI->TimeBar->GetVisibility(), ESlateVisibility::Collapsed);
 		Preview(TEXT("Bite"));
 		// Preview uses the supplied decorative fish; gameplay icons continue to come from the Icon table.

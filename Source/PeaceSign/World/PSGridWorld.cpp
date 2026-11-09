@@ -2,6 +2,7 @@
 
 #include "PSGridWorld.h"
 #include "../Gathering/PSGatheringWorldComponent.h"
+#include "../Gathering/PSBushWorldComponent.h"
 #include "../Fishing/PSFishingWaterRegion.h"
 #include "EngineUtils.h"
 
@@ -18,12 +19,18 @@
 #endif
 #include "PSWorldSaveGame.h"
 #include "PSCropGrowth.h"
+#include "../Data/PSCropDefinition.h"
 #include "PSFarmAutoTile.h"
+#include "PSNativeWaterBackdropComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Engine/SkyLight.h"
+#include "Engine/TextureCube.h"
+#include "UObject/ConstructorHelpers.h"
 #include "../Time/PSGameTimeSubsystem.h"
 
 namespace
 {
-	constexpr int32 CurrentWorldSaveVersion = 6;
+	constexpr int32 CurrentWorldSaveVersion = 9;
 	constexpr int32 LegacyStoneHealthScale = 10;
 
 	uint32 HashCell(const FIntPoint Cell, const int32 Seed)
@@ -47,6 +54,7 @@ APSGridWorld::APSGridWorld()
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
 	Gathering = CreateDefaultSubobject<UPSGatheringWorldComponent>(TEXT("Gathering"));
+	Bushes = CreateDefaultSubobject<UPSBushWorldComponent>(TEXT("Bushes"));
 
 	const auto AddMineralRule = [this](const EPSMineralType MineralType, const int32 MinimumBand, const int32 Weight)
 	{
@@ -64,11 +72,60 @@ APSGridWorld::APSGridWorld()
 	AddMineralRule(EPSMineralType::Asterium, 7, 2);
 
 	ChunkActorClass = APSTileChunkActor::StaticClass();
+	static ConstructorHelpers::FObjectFinder<UTextureCube> Reflection(TEXT("/Engine/MapTemplates/Sky/DaylightAmbientCubemap"));
+	NativeWaterReflectionCube=Reflection.Object;
+}
+
+void APSGridWorld::UpdateWaterLighting()
+{
+	auto* Backdrop=FindComponentByClass<UPSNativeWaterBackdropComponent>();
+	if(!Backdrop && bUseNativeWater)
+	{
+		Backdrop=NewObject<UPSNativeWaterBackdropComponent>(this,NAME_None,RF_Transient);
+		Backdrop->RegisterComponent();
+	}
+	if(Backdrop) Backdrop->Update(bUseNativeWater);
+	if(Backdrop) Backdrop->UpdateReflections(bUseNativeWater && bSupplyNativeWaterReflections,NativeWaterReflectionCube);
+	bool bNeed=bUseNativeWater && bSupplyNativeWaterReflections && NativeWaterReflectionCube && GetWorld();
+	if(bNeed) for(TActorIterator<ASkyLight> It(GetWorld());It;++It)
+		if(It->GetLightComponent() && It->GetLightComponent()->IsVisible()) { bNeed=false; break; }
+	if(bNeed && !NativeWaterReflections)
+	{
+		NativeWaterReflections=NewObject<USkyLightComponent>(this,NAME_None,RF_Transient);
+		NativeWaterReflections->SetupAttachment(SceneRoot);
+		NativeWaterReflections->SetMobility(EComponentMobility::Movable);
+		NativeWaterReflections->SourceType=SLS_SpecifiedCubemap;
+		NativeWaterReflections->SetCubemap(NativeWaterReflectionCube);
+		NativeWaterReflections->SetIntensity(1);
+		NativeWaterReflections->RegisterComponent();
+	}
+	if(NativeWaterReflections) NativeWaterReflections->SetVisibility(bNeed);
+}
+
+void APSGridWorld::RefreshWaterRendering()
+{
+	UpdateWaterLighting();
+	if(!GetWorld()) return;
+	if(GetWorld()->IsGameWorld())
+	{
+		TArray<FIntPoint> Chunks; ActiveChunkActors.GetKeys(Chunks);
+		for(FIntPoint Chunk:Chunks) RebuildChunk(Chunk);
+	}
+	else GenerateEditorPreview();
+}
+
+FVector APSGridWorld::WaterVisualLocation(FIntPoint Cell) const
+{
+	FVector Position=CellToWorldCenter(Cell);
+	if(bUseNativeWater && GetGroundTile(Cell)==EPSTileType::Water)
+		Position.Z+=APSTileChunkActor::GetNativeWaterSurfaceOffset(GetWorld(),Position);
+	return Position;
 }
 
 void APSGridWorld::BeginPlay()
 {
 	Super::BeginPlay();
+	UpdateWaterLighting();
 
 #if WITH_EDITOR
 	if (IsValid(EditorPreviewActor))
@@ -83,6 +140,7 @@ void APSGridWorld::BeginPlay()
 	LoadWorld();
 	ApplyFishingTestPond();
 	Gathering->InitializeResources();
+	Bushes->Initialize();
 
 	if (const APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
 	{
@@ -94,7 +152,11 @@ void APSGridWorld::BeginPlay()
 
 void APSGridWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (GrowthClock) GrowthClock->OnClockChanged.RemoveDynamic(this, &ThisClass::HandleClockChanged);
+	if (GrowthClock)
+	{
+		GrowthClock->OnClockChanged.RemoveDynamic(this, &ThisClass::HandleClockChanged);
+		GrowthClock->OnTenMinuteChanged.RemoveDynamic(this, &ThisClass::HandleFarmGrowthChanged);
+	}
 	SaveWorld();
 	Super::EndPlay(EndPlayReason);
 }
@@ -102,7 +164,12 @@ void APSGridWorld::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void APSGridWorld::EnsureGrowthUpdates()
 {
 	if (!GrowthClock && GetWorld()) GrowthClock = GetWorld()->GetSubsystem<UPSGameTimeSubsystem>();
-	if (GrowthClock) GrowthClock->OnClockChanged.AddUniqueDynamic(this, &ThisClass::HandleClockChanged);
+	if (GrowthClock)
+	{
+		GrowthClock->OnClockChanged.AddUniqueDynamic(this, &ThisClass::HandleClockChanged);
+		GrowthClock->OnTenMinuteChanged.AddUniqueDynamic(this, &ThisClass::HandleFarmGrowthChanged);
+	}
+	if (FarmGrowthMinute < 0) FarmGrowthMinute = GetFarmMinute();
 }
 
 int64 APSGridWorld::GetGrowthHalfHour() const
@@ -113,64 +180,12 @@ int64 APSGridWorld::GetGrowthHalfHour() const
 
 void APSGridWorld::HandleClockChanged()
 {
-	const int64 Now = GetGrowthHalfHour();
-	const int64 Dawn = FMath::Max<int64>(0, (Now - 12) / 48);
-	TSet<FIntPoint> ChangedChunks;
-	for (auto& Pair : ModifiedChunks)
-	{
-		bool bChanged = false;
-		for (FPSTileCell& Tile : Pair.Value.Cells)
-		{
-			if (Tile.GroundType != EPSTileType::TilledSoil) continue;
-			if (Tile.LastFarmDawn < 0 || Dawn < Tile.LastFarmDawn)
-			{
-				Tile.LastFarmDawn = Dawn;
-				continue;
-			}
-			const int64 Days = Dawn - Tile.LastFarmDawn;
-			if (Days <= 0) continue;
-			// Only the first skipped day can be watered. Two subsequent dry days kill any crop.
-			for (int64 Day = 0; Day < FMath::Min<int64>(Days, 3); ++Day)
-			{
-				if (Tile.CropType != EPSCropType::None)
-				{
-					if (Tile.bWatered)
-					{
-						Tile.DryDays = 0;
-						Tile.GrowthStage = FMath::Min<int32>(PSCropGrowth::MaxStage, Tile.GrowthStage + 1);
-					}
-					else if (++Tile.DryDays >= 2)
-					{
-						Tile.CropType = EPSCropType::None;
-						Tile.CropId = INDEX_NONE;
-						Tile.PlantedHalfHour = -1;
-						Tile.GrowthStage = 1;
-						Tile.DryDays = 0;
-					}
-				}
-				Tile.bWatered = false;
-			}
-			Tile.LastFarmDawn = Dawn;
-			bChanged = true;
-		}
-		if (bChanged)
-		{
-			if (FPSChunkData* Loaded = LoadedChunks.Find(Pair.Key)) Loaded->Cells = Pair.Value.Cells;
-			ChangedChunks.Add(Pair.Key);
-		}
-	}
-	// Keep the existing planting buckets consistent for removal and save migration.
-	for (auto It = GrowingCrops.CreateIterator(); It; ++It)
-	{
-		It.Value().RemoveAll([this](const FIntPoint Cell)
-		{
-			return GetCropType(Cell) == EPSCropType::None || GetCropStage(Cell) >= PSCropGrowth::MaxStage;
-		});
-		if (It.Value().IsEmpty()) It.RemoveCurrent();
-	}
-	for (const FIntPoint Chunk : ChangedChunks) RebuildChunk(Chunk);
-	// Save once per clock event, including half-hour progress between visible stages.
 	SaveWorld();
+}
+
+void APSGridWorld::HandleFarmGrowthChanged()
+{
+	AdvanceFarmGrowth(FMath::FloorToDouble(GetFarmMinute() / 10.0) * 10.0);
 }
 
 void APSGridWorld::Tick(const float DeltaSeconds)
@@ -251,7 +266,8 @@ int32 APSGridWorld::GetStoneHealth(const FIntPoint Cell) const
 EPSWorldObjectType APSGridWorld::GetWorldObjectType(const FIntPoint Cell) const
 {
 	if (!IsCellInsideWorld(Cell)) return EPSWorldObjectType::None;
-	if (Gathering && Gathering->HasTree(Cell)) return EPSWorldObjectType::Tree;
+	if (Gathering && Gathering->OccupiesTreeCell(Cell)) return EPSWorldObjectType::Tree;
+	if (Bushes && Bushes->HasBush(Cell)) return EPSWorldObjectType::Bush;
 	const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	const int32 CellIndex = PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize);
 	if (const FPSChunkData* Chunk = LoadedChunks.Find(ChunkCoordinate))
@@ -445,8 +461,9 @@ bool APSGridWorld::IsCellWatered(const FIntPoint Cell) const
 EPSTileInteractionResult APSGridWorld::WaterCell(const FIntPoint Cell)
 {
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
-	if (!CanWaterCell(Cell)) return EPSTileInteractionResult::NoEffect;
 	EnsureGrowthUpdates();
+	AdvanceFarmGrowth(GetFarmMinute());
+	if (!CanWaterCell(Cell)) return EPSTileInteractionResult::NoEffect;
 	const FIntPoint Coordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(Coordinate);
 	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize)];
@@ -465,7 +482,14 @@ EPSTileInteractionResult APSGridWorld::WaterCell(const FIntPoint Cell)
 EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell, const int32 CropId)
 {
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
-	if (CropId < 0) return EPSTileInteractionResult::NoEffect;
+	EnsureGrowthUpdates();
+	AdvanceFarmGrowth(GetFarmMinute());
+	if (CropId != 0)
+	{
+		const auto* Definition = FindCropDefinition(CropId);
+		if (!Definition || !GrowthClock || GrowthClock->GetSeasonIndex() != Definition->Season)
+			return EPSTileInteractionResult::NoEffect;
+	}
 	if (GetGroundTile(Cell) != EPSTileType::TilledSoil
 		|| GetWorldObjectType(Cell) != EPSWorldObjectType::None
 		|| GetCropType(Cell) != EPSCropType::None)
@@ -477,10 +501,17 @@ EPSTileInteractionResult APSGridWorld::PlantSeed(const FIntPoint Cell, const int
 
 EPSTileInteractionResult APSGridWorld::HarvestCrop(const FIntPoint Cell)
 {
+	const auto Result = HarvestCropForPlayer(Cell);
+	if (Result == EPSTileInteractionResult::Harvested) SaveWorld();
+	return Result;
+}
+
+EPSTileInteractionResult APSGridWorld::HarvestCropForPlayer(const FIntPoint Cell)
+{
 	if (!IsCellInsideWorld(Cell)) return EPSTileInteractionResult::InvalidCell;
 	if (GetCropType(Cell) == EPSCropType::None || GetCropStage(Cell) < PSCropGrowth::MaxStage)
 		return EPSTileInteractionResult::NoEffect;
-	return SetCropType(Cell, EPSCropType::None)
+	return SetCropType(Cell, EPSCropType::None, INDEX_NONE, false)
 		? EPSTileInteractionResult::Harvested
 		: EPSTileInteractionResult::NoEffect;
 }
@@ -507,11 +538,12 @@ bool APSGridWorld::ResetWorld()
 	ActiveChunkActors.GenerateKeyArray(VisibleChunks);
 	LoadedChunks.Reset();
 	ModifiedChunks.Reset();
-	GrowingCrops.Reset();
+	FarmGrowthMinute = GetFarmMinute();
 	WorldSeed = StartingWorldSeed;
 	GeneratedMiningChunks.Reset();
 	bMiningGenerationReady = false;
 	Gathering->ResetResources();
+	Bushes->Reset();
 
 	// Rebuild existing renderers in place. Destroying and respawning them in the same
 	// frame can leave the deferred old HISM visible after a development reset.
@@ -524,7 +556,7 @@ bool APSGridWorld::ResetWorld()
 			continue;
 		}
 		const FPSChunkData RenderData = BuildRenderChunkData(ChunkCoordinate, GetOrCreateChunk(ChunkCoordinate));
-		ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet);
+		ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet, bUseNativeWater);
 	}
 
 	if (const APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0))
@@ -628,7 +660,8 @@ void APSGridWorld::GenerateEditorPreview()
 	PreviewActor->bIsEditorOnlyActor = true;
 	PreviewActor->Tags.AddUnique(TEXT("PSGridEditorPreview"));
 	PreviewActor->AttachToActor(this, FAttachmentTransformRules::KeepWorldTransform);
-	PreviewActor->Rebuild(PreviewData, PreviewSize, CellSize, DirtAutoTileSet);
+	UpdateWaterLighting();
+	PreviewActor->Rebuild(PreviewData, PreviewSize, CellSize, DirtAutoTileSet, bUseNativeWater);
 	EditorPreviewActor = PreviewActor;
 	GetLevel()->MarkPackageDirty();
 #endif
@@ -641,6 +674,7 @@ void APSGridWorld::ClearEditorPreview()
 	{
 		return;
 	}
+	if(auto* Backdrop=FindComponentByClass<UPSNativeWaterBackdropComponent>()) Backdrop->Update(false);
 
 	if (!IsValid(EditorPreviewActor))
 	{
@@ -751,8 +785,6 @@ void APSGridWorld::ApplyFishingTestPond()
 		const FIntPoint Coordinate = PSGrid::CellToChunk(Cell, ChunkSize);
 		FPSChunkData& Chunk = GetOrCreateChunk(Coordinate);
 		FPSTileCell& Existing = Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cell, ChunkSize), ChunkSize)];
-		if (Existing.PlantedHalfHour >= 0)
-			if (TArray<FIntPoint>* Bucket = GrowingCrops.Find(Existing.PlantedHalfHour)) Bucket->Remove(Cell);
 		Existing = PondCell;
 		ChangedChunks.Add(Coordinate);
 	}
@@ -1158,7 +1190,7 @@ void APSGridWorld::SpawnChunkRenderer(const FIntPoint ChunkCoordinate)
 
 	ActiveChunkActors.Add(ChunkCoordinate, ChunkActor);
 	const FPSChunkData RenderData = BuildRenderChunkData(ChunkCoordinate, GetOrCreateChunk(ChunkCoordinate));
-	ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet);
+	ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet, bUseNativeWater);
 }
 
 void APSGridWorld::RebuildChunk(const FIntPoint ChunkCoordinate)
@@ -1166,7 +1198,7 @@ void APSGridWorld::RebuildChunk(const FIntPoint ChunkCoordinate)
 	if (APSTileChunkActor* ChunkActor = ActiveChunkActors.FindRef(ChunkCoordinate))
 	{
 		const FPSChunkData RenderData = BuildRenderChunkData(ChunkCoordinate, GetOrCreateChunk(ChunkCoordinate));
-		ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet);
+		ChunkActor->Rebuild(RenderData, ChunkSize, CellSize, DirtAutoTileSet, bUseNativeWater);
 	}
 }
 
@@ -1213,7 +1245,7 @@ bool APSGridWorld::SetGroundTile(const FIntPoint Cell, const EPSTileType GroundT
 	return true;
 }
 
-bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType, const int32 CropId)
+bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType, const int32 CropId, const bool bSave)
 {
 	if (!IsCellInsideWorld(Cell) || GetCropType(Cell) == CropType) return false;
 	EnsureGrowthUpdates();
@@ -1221,27 +1253,20 @@ bool APSGridWorld::SetCropType(const FIntPoint Cell, const EPSCropType CropType,
 	const FIntPoint LocalCell = PSGrid::CellToLocal(Cell, ChunkSize);
 	FPSChunkData& Chunk = GetOrCreateChunk(ChunkCoordinate);
 	FPSTileCell& Tile = Chunk.Cells[PSGrid::LocalToIndex(LocalCell, ChunkSize)];
-	if (Tile.PlantedHalfHour >= 0)
-	{
-		if (TArray<FIntPoint>* Bucket = GrowingCrops.Find(Tile.PlantedHalfHour))
-		{
-			Bucket->RemoveSingleSwap(Cell);
-			if (Bucket->IsEmpty()) GrowingCrops.Remove(Tile.PlantedHalfHour);
-		}
-	}
 	Tile.CropType = CropType;
 	Tile.LastFarmDawn = FMath::Max<int64>(0, (GetGrowthHalfHour() - 12) / 48);
 	Tile.CropId = CropType == EPSCropType::None ? INDEX_NONE : FMath::Max(0, CropId);
 	Tile.GrowthStage = 1;
 	Tile.DryDays = 0;
 	Tile.PlantedHalfHour = CropType == EPSCropType::None ? -1 : GetGrowthHalfHour();
-	if (CropType != EPSCropType::None) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).AddUnique(Cell);
+	Tile.PlantedFarmMinute = CropType == EPSCropType::None ? -1 : GetFarmMinute();
+	Tile.EffectiveGrowthMinutes = 0;
 	FPSChunkSaveData& SavedChunk = ModifiedChunks.FindOrAdd(ChunkCoordinate);
 	SavedChunk.Coordinate = ChunkCoordinate;
 	SavedChunk.Cells = Chunk.Cells;
 	SavedChunk.Veins = Chunk.Veins;
 	RebuildChunk(ChunkCoordinate);
-	SaveWorld();
+	if (bSave) SaveWorld();
 	return true;
 }
 
@@ -1296,10 +1321,13 @@ void APSGridWorld::LoadWorld()
 	if (SaveGame->SavedClockHalfHour >= 0 && GrowthClock)
 	{
 		GrowthClock->OnClockChanged.RemoveDynamic(this, &ThisClass::HandleClockChanged);
+		GrowthClock->OnTenMinuteChanged.RemoveDynamic(this, &ThisClass::HandleFarmGrowthChanged);
 		GrowthClock->RestoreClock(SaveGame->SavedClockHalfHour, SaveGame->SavedClockSecondsIntoStep);
 	}
 	const int64 Now = GetGrowthHalfHour();
-	GrowingCrops.Reset();
+	const double SavedMinute = GetFarmMinute();
+	FarmGrowthMinute = SaveGame->DataVersion >= 9 && FMath::IsFinite(SaveGame->FarmGrowthMinute)
+		&& SaveGame->FarmGrowthMinute >= 0 ? FMath::Min(SavedMinute, SaveGame->FarmGrowthMinute) : SavedMinute;
 	LoadedChunks.Reset();
 	ModifiedChunks.Reset();
 	for (const FPSChunkSaveData& Chunk : SaveGame->ModifiedChunks)
@@ -1351,14 +1379,25 @@ void APSGridWorld::LoadWorld()
 				Tile.MineralType = EPSMineralType::None;
 			}
 			if (Tile.CropType == EPSCropType::None) continue;
+			Tile.CropId = FMath::Max(0, Tile.CropId);
+			const auto* Definition = FindCropDefinition(Tile.CropId);
+			const int32 Required = Definition ? Definition->GRtime * PSCropGrowth::MinutesPerDay : PSCropGrowth::LegacyGrowthMinutes;
+			if (SaveGame->DataVersion >= 9)
+			{
+				Tile.EffectiveGrowthMinutes = FMath::IsFinite(Tile.EffectiveGrowthMinutes)
+					? FMath::Clamp(Tile.EffectiveGrowthMinutes, 0.0, static_cast<double>(Required)) : 0.0;
+				Tile.GrowthStage = PSCropGrowth::GetStageForMinutes(Tile.EffectiveGrowthMinutes, Required);
+				Tile.DryDays = FMath::Min<uint8>(Tile.DryDays, 1);
+				continue;
+			}
 			if (SaveGame->DataVersion >= 5)
 			{
 				Tile.GrowthStage = FMath::Clamp<uint8>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage);
 				Tile.DryDays = FMath::Min<uint8>(Tile.DryDays, 1);
-				if (Tile.GrowthStage < PSCropGrowth::MaxStage) GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
+				Tile.EffectiveGrowthMinutes = PSCropGrowth::MinutesForLegacyStage(Tile.GrowthStage, Required);
+				Tile.PlantedFarmMinute = Tile.PlantedHalfHour >= 0 ? Tile.PlantedHalfHour * 30.0 : SavedMinute;
 				continue;
 			}
-			Tile.CropId = FMath::Max(0, Tile.CropId);
 			const int64 SavedStageAge = (FMath::Clamp<int32>(Tile.GrowthStage, 1, PSCropGrowth::MaxStage) - 1)
 				* PSCropGrowth::HalfHoursPerStage;
 			const int64 TimestampAge = SaveGame->GrowthClockHalfHour >= 0 && Tile.PlantedHalfHour >= 0
@@ -1367,18 +1406,17 @@ void APSGridWorld::LoadWorld()
 			const int64 Age = FMath::Max(SavedStageAge, TimestampAge);
 			Tile.PlantedHalfHour = Now - Age;
 			Tile.GrowthStage = PSCropGrowth::GetStage(Tile.PlantedHalfHour, Now);
+			Tile.EffectiveGrowthMinutes = PSCropGrowth::MinutesForLegacyStage(Tile.GrowthStage, Required);
+			Tile.PlantedFarmMinute = FMath::Max(0.0, Tile.PlantedHalfHour * 30.0);
 			// Existing crops get one watered day of grace when upgrading the old save.
 			Tile.bWatered = true;
 			Tile.LastFarmDawn = FMath::Max<int64>(0, (Now - 12) / 48);
-			if (Tile.GrowthStage < PSCropGrowth::MaxStage)
-			{
-				GrowingCrops.FindOrAdd(Tile.PlantedHalfHour).Add(Cell);
-			}
 		}
 		ModifiedChunks.Add(Chunk.Coordinate, MoveTemp(Restored));
 	}
 	Gathering->Restore(SaveGame->GatheringTrees, SaveGame->GatheringDrops,
-		SaveGame->bGatheringInitialized, SaveGame->bGatheringUnlocked);
+		SaveGame->bGatheringInitialized, SaveGame->bGatheringUnlocked, SaveGame->RemovedGatheringPlacements);
+	Bushes->Restore(SaveGame->Bushes, SaveGame->bBushesInitialized);
 	EnsureGrowthUpdates();
 }
 
@@ -1409,6 +1447,9 @@ void APSGridWorld::SaveWorld() const
 	SaveGame->WorldSeed = WorldSeed;
 	SaveGame->DataVersion = CurrentWorldSaveVersion;
 	SaveGame->GatheringTrees = Gathering->GetRecords();
+	SaveGame->Bushes = Bushes->GetRecords();
+	SaveGame->bBushesInitialized = Bushes->IsInitialized();
+	SaveGame->RemovedGatheringPlacements = Gathering->GetRemovedPlacements();
 	SaveGame->GatheringDrops = Gathering->GetDrops();
 	SaveGame->bGatheringInitialized = Gathering->IsInitialized();
 	SaveGame->bGatheringUnlocked = Gathering->GetSavedUnlocked();
@@ -1424,6 +1465,7 @@ void APSGridWorld::SaveWorld() const
 	SaveGame->SavedPlainStoneWeight = PlainStoneSpawnWeight;
 	SaveGame->SavedMineralRules = MineralSpawnRules;
 	SaveGame->GrowthClockHalfHour = GetGrowthHalfHour();
+	SaveGame->FarmGrowthMinute = FarmGrowthMinute;
 	if (const UPSGameTimeSubsystem* Clock = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr)
 	{
 		SaveGame->SavedClockHalfHour = Clock->GetHalfHourIndex();

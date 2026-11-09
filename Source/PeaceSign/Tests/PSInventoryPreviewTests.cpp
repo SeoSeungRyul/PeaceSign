@@ -122,24 +122,26 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Hotbar item can move into bag"), Inventory->MoveItem(
 		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Bag, 0));
 	const EPSItemType FirstType = Widget->GetItem(0)->ItemType;
-	TestTrue(TEXT("Move to empty slot"), Widget->MoveItem(0, 9));
+	constexpr int32 EmptyBagSlot = 7;
+	TestTrue(TEXT("Move to empty slot"), Widget->MoveItem(0, EmptyBagSlot));
 	TestNull(TEXT("Source cleared only after move"), Widget->GetItem(0));
-	TestEqual(TEXT("Destination retains item"), Widget->GetItem(9)->ItemType, FirstType);
-	TestFalse(TEXT("Locked destination rejects move"), Widget->MoveItem(9, 10));
-	TestFalse(TEXT("Outside grid rejects move"), Widget->MoveItem(9, -1));
-	TestEqual(TEXT("Rejected moves preserve source"), Widget->GetItem(9)->ItemType, FirstType);
+	TestEqual(TEXT("Destination retains item"), Widget->GetItem(EmptyBagSlot)->ItemType, FirstType);
+	TestFalse(TEXT("Locked destination rejects move"), Widget->MoveItem(EmptyBagSlot, 10));
+	TestFalse(TEXT("Outside grid rejects move"), Widget->MoveItem(EmptyBagSlot, -1));
+	TestEqual(TEXT("Rejected moves preserve source"), Widget->GetItem(EmptyBagSlot)->ItemType, FirstType);
 	TestTrue(TEXT("Seed can move from hotbar into bag"), Inventory->MoveItem(
 		EPSInventoryArea::Hotbar, 1, EPSInventoryArea::Bag, 1));
-	TestTrue(TEXT("Occupied bag slots swap"), Widget->MoveItem(9, 1));
+	TestTrue(TEXT("Occupied bag slots swap"), Widget->MoveItem(EmptyBagSlot, 1));
 	TestEqual(TEXT("Swap destination"), Widget->GetItem(1)->ItemType, FirstType);
-	TestEqual(TEXT("Swap source"), Widget->GetItem(9)->ItemType, EPSItemType::TestSeed);
-	TestEqual(TEXT("Swap retains stack count"), Widget->GetItem(9)->Quantity, 24);
+	TestEqual(TEXT("Swap source"), Widget->GetItem(EmptyBagSlot)->ItemType, EPSItemType::TestSeed);
+	TestEqual(TEXT("Swap retains stack count"), Widget->GetItem(EmptyBagSlot)->Quantity, 24);
 	TestFalse(TEXT("Cannot move an empty slot"), Widget->MoveItem(0, 2));
 
 	Inventory->InitializeDefaults();
 	Inventory->HotbarSlots[1].Quantity = 990;
 	Inventory->BagSlots[0].ItemType = EPSItemType::TestSeed;
-	Inventory->BagSlots[0].CropId = 0;
+	Inventory->BagSlots[0].CropId = PSItemIds::LettuceCropId;
+	Inventory->BagSlots[0].ItemId = PSItemIds::LettuceSeed;
 	Inventory->BagSlots[0].Quantity = 20;
 	TestTrue(TEXT("Equal items merge across bag and hotbar"), Inventory->MoveItem(
 		EPSInventoryArea::Bag, 0, EPSInventoryArea::Hotbar, 1));
@@ -183,7 +185,7 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 	LoadedInventory->SaveSlotName = Inventory->SaveSlotName;
 	TestTrue(TEXT("Inventory save reloads"), LoadedInventory->LoadInventory());
 	TestEqual(TEXT("Saved seeds reload"), LoadedInventory->CountItem(EPSItemType::TestSeed), 24);
-	TestEqual(TEXT("Saved hotbar seed keeps crop ID"), LoadedInventory->GetHotbarSlot(1).CropId, 0);
+	TestEqual(TEXT("Saved hotbar seed keeps crop ID"), LoadedInventory->GetHotbarSlot(1).CropId, PSItemIds::LettuceCropId);
 	TestTrue(TEXT("Saved bag remains separate"), LoadedInventory->GetBagSlot(0).IsEmpty());
 	UPSInventorySaveGame* LegacySave = NewObject<UPSInventorySaveGame>();
 	LegacySave->Slots.SetNum(UPSInventoryComponent::MaxBagSlotCount);
@@ -224,6 +226,20 @@ bool FPSInventoryPreviewTest::RunTest(const FString& Parameters)
 		LoadedInventory->GetHotbarSlot(3).ItemType, EPSItemType::Wood);
 	TestEqual(TEXT("Migration falls back to the first empty bag slot"),
 		LoadedInventory->GetBagSlot(0).ItemType, EPSItemType::Pickaxe);
+
+	auto* OldWateringSave = NewObject<UPSInventorySaveGame>();
+	OldWateringSave->DataVersion = 10;
+	OldWateringSave->HotbarSlots = Inventory->HotbarSlots;
+	OldWateringSave->HotbarSlots[5].CurrentDurability = INDEX_NONE;
+	OldWateringSave->BagSlots.SetNum(UPSInventoryComponent::MaxBagSlotCount);
+	TestTrue(TEXT("Old watering can fixture saves"), UGameplayStatics::SaveGameToSlot(OldWateringSave, Inventory->SaveSlotName, 0));
+	TestTrue(TEXT("Old watering can fixture loads"), LoadedInventory->LoadInventory());
+	TestEqual(TEXT("Legacy watering can receives finite durability in its original slot"), LoadedInventory->GetHotbarSlot(5).CurrentDurability, 100);
+	TestEqual(TEXT("First upgrade is granted to the bag"), LoadedInventory->GetBagSlot(9).ItemId, PSItemIds::UpgradedWateringCan);
+	TestEqual(TEXT("Second upgrade is granted to the bag"), LoadedInventory->GetBagSlot(8).ItemId, PSItemIds::SecondUpgradedWateringCan);
+	TestTrue(TEXT("Watering can migration saves"), LoadedInventory->SaveInventory());
+	TestTrue(TEXT("Migrated watering cans reload"), LoadedInventory->LoadInventory());
+	TestEqual(TEXT("Reload never duplicates starter watering cans"), LoadedInventory->CountItem(EPSItemType::WateringCan), 3);
 	UGameplayStatics::DeleteGameInSlot(Inventory->SaveSlotName, 0);
 
 	// Restore the initial layout before taking visual review images.

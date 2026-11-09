@@ -325,7 +325,7 @@ void UPSFishingWidget::Refresh(const EPSFishingState State, const float TimeRema
 	if (StateLabel)
 	{
 		if (State == EPSFishingState::WaitingForBite) StateLabel->SetText(NSLOCTEXT("Fishing", "Waiting", "입질을 기다리는 중  F / 우클릭 취소"));
-		if (State == EPSFishingState::BiteWindow) StateLabel->SetText(NSLOCTEXT("Fishing", "Bite", "! 입질 !  F 또는 우클릭"));
+		if (State == EPSFishingState::BiteWindow) StateLabel->SetText(NSLOCTEXT("Fishing", "Bite", "! 입질 !"));
 		if (State == EPSFishingState::Minigame) StateLabel->SetText(NSLOCTEXT("Fishing", "Minigame", "노란 칸의 화살표 방향을 입력하세요"));
 	}
 	if (CastLabel) CastLabel->SetText(State == EPSFishingState::CastWindup

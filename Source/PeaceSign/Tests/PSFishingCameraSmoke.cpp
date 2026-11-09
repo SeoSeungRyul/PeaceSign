@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "../PSPlayerController.h"
+#include "../PSPlayerCharacter.h"
 #include "../World/PSGridWorld.h"
 #include "Camera/PlayerCameraManager.h"
 #include "Engine/World.h"
@@ -100,6 +101,8 @@ namespace
 			if (!Grid) return;
 			// Capturing a frame can block wall time without advancing simulation.
 			const double Elapsed = World->GetTimeSeconds() - PhaseStarted;
+			const auto* Character = Cast<APSPlayerCharacter>(Controller->GetPawn());
+			const double CameraSettleSeconds = Character ? Character->GetFishingCameraBlendSeconds() + .15 : 1.35;
 			if (Phase == 0)
 			{
 				Controller->SelectHotbarSlot(2);
@@ -118,7 +121,7 @@ namespace
 			{
 				if (bLongCast && (Controller->GetFishingCastPosition() < .45f || Controller->GetFishingCastPosition() > .55f)) return;
 				if (!Controller->ConfirmFishingCast()) { Finish(false); return; }
-				UE_LOG(LogTemp, Display, TEXT("FISHING_CAMERA_SMOKE throw-grade=%d"), static_cast<int32>(Controller->GetFishingCastGrade()));
+				UE_LOG(LogTemp, Display, TEXT("FISHING_CAMERA_SMOKE throw-grade=%d blendSeconds=%.2f"), static_cast<int32>(Controller->GetFishingCastGrade()), CameraSettleSeconds - .15);
 				bFlightCaptured = false;
 				Phase = 2; PhaseStarted = World->GetTimeSeconds();
 			}
@@ -131,7 +134,7 @@ namespace
 					bFlightCaptured = true; break;
 				}
 			}
-			else if (Phase == 2 && Elapsed >= .6)
+			else if (Phase == 2 && Elapsed >= CameraSettleSeconds)
 			{
 				FVector Bobber;
 				if (!Controller->GetFishingFocusLocation(Bobber) || !CheckCentre(Controller, Bobber, bLongCast ? TEXT("long-bobber") : TEXT("bobber")))
@@ -152,7 +155,7 @@ namespace
 				if (!Controller->CancelFishingForMovementInput()) { Finish(false); return; }
 				Phase = 4; PhaseStarted = World->GetTimeSeconds();
 			}
-			else if (Phase == 4 && Elapsed >= .6)
+			else if (Phase == 4 && Elapsed >= CameraSettleSeconds)
 			{
 				if (!CheckCentre(Controller, Controller->GetPawn()->GetActorLocation(), TEXT("returned-player"))) { Finish(false); return; }
 				if (bLongCast) { Finish(CheckJournal(Controller)); return; }

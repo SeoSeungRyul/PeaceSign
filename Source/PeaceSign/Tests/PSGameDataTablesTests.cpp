@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "../PSPlayerCharacter.h"
+#include "../PSPlayerStatsComponent.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "../Data/PSGameDataTables.h"
@@ -125,6 +127,30 @@ bool FPSGameDataTablesTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Blank shake cannot be rerolled immediately"), Resources->Shake(Tree.Cell));
 	Grid->LoadWorld();
 	TestEqual(TEXT("Blank cooldown survives reload"), Resources->GetTree(Tree.Cell).NextShakeHalfHour, Deadline);
+	FPSTreeShakeDropRow Chestnut = Blank;
+	Chestnut.ItemID = TEXT("030208");
+	Chestnut.Count = 1;
+	BlankTable->RemoveRow(TEXT("Blank"));
+	BlankTable->AddRow(TEXT("Chestnut"), Chestnut);
+	auto* Player = World->SpawnActor<APSPlayerCharacter>();
+	auto* Stats = Player->StatsComponent.Get();
+	Stats->MaxHealth = 91;
+	Stats->Health = 91;
+	Resources->Restore({Tree}, {}, true, true);
+	TestTrue(TEXT("Chestnut shake completes"), Resources->Shake(Tree.Cell, nullptr, Player));
+	TestEqual(TEXT("Chestnut damage rounds up five percent of max HP"), Stats->Health, 86.f);
+	TestFalse(TEXT("Chestnut cannot be rerolled during cooldown"), Resources->Shake(Tree.Cell, nullptr, Player));
+	TestEqual(TEXT("Cooldown prevents repeat damage"), Stats->Health, 86.f);
+	auto* PickupInventory = NewObject<UPSInventoryComponent>(World);
+	PickupInventory->bAutoSave = false;
+	PickupInventory->ResetToDefaults();
+	if (TestEqual(TEXT("Chestnut is left as one world drop"), Resources->GetDrops().Num(), 1))
+		TestTrue(TEXT("Chestnut can be picked up"), Resources->CollectDrop(Resources->GetDrops()[0].Id, PickupInventory));
+	TestEqual(TEXT("Picking up the chestnut does not apply damage"), Stats->Health, 86.f);
+	Stats->Health = 2;
+	Resources->Restore({Tree}, {}, true, true);
+	TestTrue(TEXT("Low health still permits a chestnut shake"), Resources->Shake(Tree.Cell, nullptr, Player));
+	TestEqual(TEXT("Chestnut damage preserves at least one HP"), Stats->Health, 1.f);
 	Resources->ItemTable = nullptr;
 	TestFalse(TEXT("Partially configured tables do not fall back to free prototype rewards"), Resources->ValidateRewardData(Tree.Cell, false, Error));
 	auto* Inventory = NewObject<UPSInventoryComponent>(World); Inventory->bAutoSave = false; Inventory->ResetToDefaults();

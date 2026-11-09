@@ -87,6 +87,7 @@ FName UPSGameDataLibrary::CanonicalItemID(const FName ItemID)
 EPSItemType UPSGameDataLibrary::GatheringItemType(const FName ItemID)
 {
 	const FName Canonical = CanonicalItemID(ItemID);
+	if (Canonical == TEXT("Forage.WildStrawberry") || Canonical == TEXT("Forage.Blackberry")) return EPSItemType::GatheredFruit;
 	for (int32 Species = 1; Species <= 6; ++Species)
 	{
 		if (Canonical == FName(*FString::Printf(TEXT("03010%d"), Species))) return EPSItemType::Wood;

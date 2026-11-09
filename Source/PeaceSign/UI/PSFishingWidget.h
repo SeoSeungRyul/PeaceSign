@@ -50,6 +50,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Fishing|Editor") static bool AddFishPanelPrefixes(UObject* WidgetBlueprintAsset);
 	/** Move feedback to the bottom left and split the overhead X, preserving the existing art. */
 	UFUNCTION(BlueprintCallable, Category="Fishing|Editor") static bool UpdateFeedbackLayout(UObject* WidgetBlueprintAsset);
+	/** Remove only the legacy bite input hint, retaining the supplied exclamation artwork. */
+	UFUNCTION(BlueprintCallable, Category="Fishing|Editor") static bool RemoveBiteInputHint(UObject* WidgetBlueprintAsset);
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Layout") bool bFollowPlayer = true;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Layout") FVector2D MinigameOffset = FVector2D(0, -100);
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fishing|Layout") FVector2D CastingOffset = FVector2D(100, -100);

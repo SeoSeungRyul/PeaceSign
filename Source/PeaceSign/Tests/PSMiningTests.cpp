@@ -145,7 +145,7 @@ bool FPSMiningTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Bare-hand hit removes ten health"), Grid->GetStoneHealth(StoneCell), 20);
 	if (UPSWorldSaveGame* PartialSave = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0)))
 	{
-		TestEqual(TEXT("Mining save includes gathering data version"), PartialSave->DataVersion, 6);
+		TestTrue(TEXT("Mining save uses a version that supports gathering data"), PartialSave->DataVersion >= 6);
 		const FIntPoint ChunkCoordinate = PSGrid::CellToChunk(StoneCell, Grid->ChunkSize);
 		const FPSChunkSaveData* PartialChunk = PartialSave->ModifiedChunks.FindByPredicate(
 			[ChunkCoordinate](const FPSChunkSaveData& Chunk) { return Chunk.Coordinate == ChunkCoordinate; });

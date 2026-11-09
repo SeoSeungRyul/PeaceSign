@@ -5,6 +5,10 @@
 #include "../World/PSTileChunkActor.h"
 #include "../World/PSCropGrowth.h"
 #include "../PSPlayerController.h"
+#include "../PSPlayerCharacter.h"
+#include "../PSPlayerStatsComponent.h"
+#include "../Data/PSCropDefinition.h"
+#include "../Gathering/PSGatheringWorldComponent.h"
 #include "../Inventory/PSInventoryComponent.h"
 #include "../Skills/PSPlayerSkillComponent.h"
 #include "../Time/PSGameTimeSubsystem.h"
@@ -147,70 +151,107 @@ bool FPSFarmingInventoryTest::RunTest(const FString& Parameters)
 			Controller->HotbarSlotActions.Contains(Mapping.Action));
 	}
 
+	APSPlayerCharacter* Farmer = World->SpawnActor<APSPlayerCharacter>();
+	Controller->Possess(Farmer);
 	TArray<FIntPoint> Cells;
-	for (int32 Y = -10; Y < 10 && Cells.Num() < 2; ++Y)
-		for (int32 X = -10; X < 10 && Cells.Num() < 2; ++X)
-			if (Grid->GetGroundTile(FIntPoint(X, Y)) == EPSTileType::Grass
-				&& Grid->GetWorldObjectType(FIntPoint(X, Y)) == EPSWorldObjectType::None)
-				Cells.Add(FIntPoint(X, Y));
-	if (!TestEqual(TEXT("Two farm cells are available"), Cells.Num(), 2))
+	for (int32 Y = -10; Y < 10 && Cells.Num() < 3; ++Y)
+		for (int32 X = -10; X < 10 && Cells.Num() < 3; ++X)
+			if (Grid->CanTillCell(FIntPoint(X, Y))) Cells.Add(FIntPoint(X, Y));
+	if (!TestEqual(TEXT("Three farm cells available"), Cells.Num(), 3)
+		|| !TestNotNull(TEXT("Imported lettuce row exists"), Grid->FindCropDefinition(PSItemIds::LettuceCropId)))
 	{
 		World->DestroyWorld(false);
 		return false;
 	}
-	for (const FIntPoint Cell : Cells)
-		TestEqual(TEXT("Unoccupied farm ground can be tilled"), Grid->TillCell(Cell), EPSTileInteractionResult::Tilled);
-
-	Controller->SelectHotbarSlot(0);
-	TestEqual(TEXT("Slot one equips its hoe"), Controller->GetEquipment(), EPSEquipment::Hoe);
-	TestTrue(TEXT("Moving the selected hoe succeeds"), Controller->InventoryComponent->MoveItem(
-		EPSInventoryArea::Hotbar, 0, EPSInventoryArea::Hotbar, 9));
-	TestEqual(TEXT("Empty selected slot becomes bare hands"), Controller->GetEquipment(), EPSEquipment::BareHands);
-	TestTrue(TEXT("Returning the hoe refreshes equipment"), Controller->InventoryComponent->MoveItem(
-		EPSInventoryArea::Hotbar, 9, EPSInventoryArea::Hotbar, 0));
-	TestEqual(TEXT("Returned hoe equips again"), Controller->GetEquipment(), EPSEquipment::Hoe);
-
-	Controller->SelectHotbarSlot(1);
-	TestEqual(TEXT("Slot two equips its seed"), Controller->GetEquipment(), EPSEquipment::Seed);
-	const int32 SeedsBefore = Controller->InventoryComponent->GetHotbarSlot(1).Quantity;
-	TestEqual(TEXT("Selected seed plants"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Planted);
-	TestEqual(TEXT("Successful planting consumes one selected seed"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore - 1);
-	TestEqual(TEXT("Planted tile stores crop data ID"), Grid->GetCropId(Cells[0]), 0);
-	TestEqual(TEXT("Failed repeat planting consumes nothing"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::NoEffect);
-	TestEqual(TEXT("Rejected planting preserves seeds"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore - 1);
-
+	const FIntPoint LettuceCell = Cells[0];
+	const auto StandAt = [&](FIntPoint Cell) { Farmer->SetActorLocation(Grid->CellToWorldCenter(Cell) + FVector(0, 0, 100)); };
 	UPSGameTimeSubsystem* Clock = World->GetSubsystem<UPSGameTimeSubsystem>();
-	TestNotNull(TEXT("Growth clock exists"), Clock);
-	Controller->SelectHotbarSlot(5);
-	TestEqual(TEXT("Slot six equips watering can"), Controller->GetEquipment(), EPSEquipment::WateringCan);
-	for (int32 Day = 0; Day < 4; ++Day)
-	{
-		TestEqual(TEXT("Equipped watering can waters crop"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Watered);
-		Clock->AdvanceGameDays(1);
-	}
-	TestEqual(TEXT("Crop reaches harvest stage"), Grid->GetCropStage(Cells[0]), PSCropGrowth::MaxStage);
-	Controller->SelectHotbarSlot(0);
-	TestEqual(TEXT("Hoe harvest succeeds"), Controller->UseEquippedItemOnCell(Cells[0]), EPSTileInteractionResult::Harvested);
-	TestEqual(TEXT("Successful harvest consumes one hoe durability"), Controller->InventoryComponent->GetHotbarSlot(0).CurrentDurability, 99);
-	TestEqual(TEXT("Successful harvest awards two farming XP"),
-		Controller->SkillComponent->GetSkillState(EPSPlayerSkillField::Farming).Experience, 2);
-	TestEqual(TEXT("Harvest adds matching produce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, 0), 1);
-	TestEqual(TEXT("Harvest leaves empty tilled soil"), Grid->GetCropType(Cells[0]), EPSCropType::None);
-
+	Clock->RestoreClock(12, 0);
+	Grid->TillCell(LettuceCell);
+	StandAt(LettuceCell);
 	Controller->SelectHotbarSlot(1);
-	TestEqual(TEXT("Second seed plants"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::Planted);
-	for (int32 Day = 0; Day < 4; ++Day)
+	const int32 SeedsBefore = Controller->InventoryComponent->GetHotbarSlot(1).Quantity;
+	TestEqual(TEXT("Starter seed has the lettuce item identity"), Controller->InventoryComponent->GetHotbarSlot(1).ItemId, PSItemIds::LettuceSeed);
+	TestEqual(TEXT("Level zero cannot plant lettuce"), Controller->UseEquippedItemOnCell(LettuceCell), EPSTileInteractionResult::NoEffect);
+	Controller->SelectHotbarSlot(0);
+	TestEqual(TEXT("First player tilling succeeds"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::Tilled);
+	TestEqual(TEXT("Tilling opens farming level one"), Controller->SkillComponent->GetSkillLevel(EPSPlayerSkillField::Farming), 1);
+	Controller->UseEquippedItemOnCell(Cells[2]);
+	TestEqual(TEXT("Second till does not grant bonus XP"), Controller->SkillComponent->GetSkillState(EPSPlayerSkillField::Farming).Experience, 0);
+	Controller->SelectHotbarSlot(1);
+	StandAt(LettuceCell + FIntPoint(3, 0));
+	TestEqual(TEXT("Out-of-range sowing fails"), Controller->UseEquippedItemOnCell(LettuceCell), EPSTileInteractionResult::NoEffect);
+	TestEqual(TEXT("Failed sowing preserves seeds"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore);
+	StandAt(LettuceCell + FIntPoint(2, 0));
+	TestEqual(TEXT("Lettuce can be planted two cells away in spring"), Controller->UseEquippedItemOnCell(LettuceCell), EPSTileInteractionResult::Planted);
+	TestEqual(TEXT("One seed consumed"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore - 1);
+	TestEqual(TEXT("Crop ID is carried into the field"), Grid->GetCropId(LettuceCell), PSItemIds::LettuceCropId);
+	TestEqual(TEXT("Occupied plot rejects sowing"), Controller->UseEquippedItemOnCell(LettuceCell), EPSTileInteractionResult::NoEffect);
+	TestEqual(TEXT("Occupied plot never consumes seeds"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, SeedsBefore - 1);
+	for (int32 Day = 0; Day < 2; ++Day)
 	{
-		Grid->WaterCell(Cells[1]);
+		Grid->WaterCell(LettuceCell);
 		Clock->AdvanceGameDays(1);
 	}
-	TestTrue(TEXT("Produce stack can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::TestCrop, 998, 0));
-	TestTrue(TEXT("Remaining bag cells can be filled"), Controller->InventoryComponent->AddItem(EPSItemType::Wood, 8991));
+	Grid->WaterCell(LettuceCell);
+	Clock->AdvanceGameHours(23);
+	Clock->Tick(50.f);
+	TestEqual(TEXT("Lettuce at 71h50 is not ready"), Grid->GetCropStage(LettuceCell), 4);
+	Clock->Tick(10.f);
+	TestEqual(TEXT("Lettuce reaches 100% at 72 watered hours"), Grid->GetCropStage(LettuceCell), 5);
+	Grid->WaterCell(LettuceCell);
 	Controller->SelectHotbarSlot(0);
-	TestEqual(TEXT("Full inventory blocks harvest"), Controller->UseEquippedItemOnCell(Cells[1]), EPSTileInteractionResult::InventoryFull);
-	TestEqual(TEXT("Blocked harvest keeps mature crop"), Grid->GetCropStage(Cells[1]), PSCropGrowth::MaxStage);
-	TestEqual(TEXT("Blocked harvest does not add produce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, 0), 999);
-	TestEqual(TEXT("Blocked harvest consumes no hoe durability"), Controller->InventoryComponent->GetHotbarSlot(0).CurrentDurability, 99);
+	TestEqual(TEXT("Hoe no longer harvests ripe crop"), Controller->UseEquippedItemOnCell(LettuceCell), EPSTileInteractionResult::NoEffect);
+	Controller->HandleInteract();
+	Controller->AdvanceCropHarvest(0.4f);
+	Controller->HandleInteractReleased();
+	Controller->AdvanceCropHarvest(0.8f);
+	TestEqual(TEXT("Released hold preserves ripe crop"), Grid->GetCropStage(LettuceCell), 5);
+	Controller->HandleInteract();
+	Controller->AdvanceCropHarvest(0.4f);
+	StandAt(LettuceCell + FIntPoint(1, 0));
+	Controller->AdvanceCropHarvest(0.8f);
+	TestEqual(TEXT("Movement cancels harvest even inside range"), Grid->GetCropStage(LettuceCell), 5);
+	Controller->HandleInteract();
+	Controller->AdvanceCropHarvest(0.4f);
+	Farmer->StatsComponent->ApplyDamage(1.f);
+	Controller->AdvanceCropHarvest(0.8f);
+	TestEqual(TEXT("Damage cancels harvest"), Grid->GetCropStage(LettuceCell), 5);
+	Controller->HandleInteract();
+	Controller->AdvanceCropHarvest(0.79f);
+	TestEqual(TEXT("Harvest cannot finish early"), Grid->GetCropStage(LettuceCell), 5);
+	Controller->AdvanceCropHarvest(0.01f);
+	Controller->AdvanceCropHarvest(1.0f);
+	TestEqual(TEXT("One completed hold awards one lettuce"), Controller->InventoryComponent->CountItem(EPSItemType::TestCrop, PSItemIds::LettuceCropId), 1);
+	TestEqual(TEXT("Harvest awards two farming XP"), Controller->SkillComponent->GetSkillState(EPSPlayerSkillField::Farming).Experience, 2);
+	TestEqual(TEXT("Harvest retains the soil"), Grid->GetGroundTile(LettuceCell), EPSTileType::TilledSoil);
+	TestTrue(TEXT("Harvest retains moisture"), Grid->IsCellWatered(LettuceCell));
+	TestEqual(TEXT("Harvest removes only the crop"), Grid->GetCropType(LettuceCell), EPSCropType::None);
+
+	Controller->InventoryComponent->ResetToDefaults();
+	TestTrue(TEXT("Full bag fixture"), Controller->InventoryComponent->AddItem(EPSItemType::Wood, 8 * 999));
+	Grid->PlantSeed(LettuceCell);
+	for (int32 Day = 0; Day < 4; ++Day)
+	{
+		Grid->WaterCell(LettuceCell);
+		Clock->AdvanceGameDays(1);
+	}
+	Clock->AdvanceGameDays(2);
+	TestEqual(TEXT("Ripe crop survives two dry days"), Grid->GetCropStage(LettuceCell), 5);
+	const int32 DropsBefore = Grid->Gathering->GetDrops().Num();
+	Controller->HandleInteract();
+	Controller->AdvanceCropHarvest(0.8f);
+	TestEqual(TEXT("A full bag still permits harvest"), Grid->GetCropType(LettuceCell), EPSCropType::None);
+	if (TestEqual(TEXT("Full bag creates one persistent produce drop"), Grid->Gathering->GetDrops().Num(), DropsBefore + 1))
+		TestEqual(TEXT("The overflow is exactly one crop"), Grid->Gathering->GetDrops().Last().Item.Quantity, 1);
+	const auto* SavedHarvest = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(WorldSlot, 0));
+	if (TestNotNull(TEXT("World save is readable after harvesting with a full bag"), SavedHarvest))
+		TestEqual(TEXT("The world save contains the overflow drop"), SavedHarvest->GatheringDrops.Num(), DropsBefore + 1);
+	Clock->AdvanceGameDays(28);
+	StandAt(LettuceCell);
+	Controller->SelectHotbarSlot(1);
+	TestEqual(TEXT("Summer blocks lettuce sowing"), Controller->UseEquippedItemOnCell(LettuceCell), EPSTileInteractionResult::NoEffect);
+	TestEqual(TEXT("Season rejection keeps the seed"), Controller->InventoryComponent->GetHotbarSlot(1).Quantity, 24);
 
 	UGameplayStatics::DeleteGameInSlot(WorldSlot, 0);
 	UGameplayStatics::DeleteGameInSlot(InventorySlot, 0);

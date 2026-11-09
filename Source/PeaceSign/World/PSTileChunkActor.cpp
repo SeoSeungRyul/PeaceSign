@@ -5,6 +5,7 @@
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/BoxComponent.h"
 #include "Engine/Texture2D.h"
+#include "Engine/StaticMesh.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
@@ -13,6 +14,12 @@
 #include "PSWaterAutoTile.h"
 #include "PSCropGrowth.h"
 #include "PSFarmAutoTile.h"
+#include "Components/ChildActorComponent.h"
+#include "WaterBodyCustomActor.h"
+#include "WaterBodyComponent.h"
+#include "WaterWaves.h"
+#include "GerstnerWaterWaves.h"
+#include "WaterSubsystem.h"
 
 APSTileChunkActor::APSTileChunkActor()
 {
@@ -93,6 +100,15 @@ APSTileChunkActor::APSTileChunkActor()
 	}
 
 	ConfigureInstances(GrassInstances);
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> WaterSurface(
+		TEXT("/Game/Art/Tiles/Water/MI_WaterSurface.MI_WaterSurface"));
+	if (WaterSurface.Succeeded()) WaterSurfaceMaterial = WaterSurface.Object;
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> NativeShore(TEXT("/Game/Art/Tiles/Water/LinkPrototype/M_LinkWaterShore"));
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> NativeSurface(TEXT("/Game/Art/Tiles/Water/LinkPrototype/MI_LinkWater"));
+	static ConstructorHelpers::FObjectFinder<UWaterWavesAsset> WaveAsset(TEXT("/Game/Art/Tiles/Water/LinkPrototype/WW_LinkWater"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> NativePlane(TEXT("/Water/Meshes/S_WaterPlane_256"));
+	NativeShoreMaterial=NativeShore.Object; NativeSurfaceMaterial=NativeSurface.Object;
+	NativeWaves=WaveAsset.Object; NativeMesh=NativePlane.Object;
 	WaterVariantTextures.SetNum(PSWaterAutoTile::VariantCount + 1);
 	DefaultDirtVariantTextures.SetNum(PSDirtAutoTile::VariantCount + 1);
 	for (uint8 Variant = 1; Variant <= PSWaterAutoTile::VariantCount; ++Variant)
@@ -147,8 +163,9 @@ void APSTileChunkActor::Rebuild(
 	const FPSChunkData& ChunkData,
 	const int32 ChunkSize,
 	const float CellSize,
-	const UPSDirtAutoTileSet* DirtTileSet)
+	const UPSDirtAutoTileSet* DirtTileSet, const bool bNativeWater)
 {
+	UpdateNativeWater(ChunkData, ChunkSize, CellSize, bNativeWater);
 	RebuildBlockingCollision(ChunkData, ChunkSize, CellSize);
 	GrassInstances->ClearInstances();
 	DirtInstances->ClearInstances();
@@ -217,7 +234,7 @@ void APSTileChunkActor::Rebuild(
 				&& !(Cell.bFixedVariant && Cell.bWaterArtwork);
 			const bool bUsesWaterVariant = (Cell.bFixedVariant ? Cell.bWaterArtwork : Cell.GroundType == EPSTileType::Water)
 				&& WaterVariantTextures.IsValidIndex(Cell.Variant) && Cell.Variant > 0
-				&& WaterVariantTextures[Cell.Variant] && DirtTextureMaterial;
+				&& WaterVariantTextures[Cell.Variant] && (WaterSurfaceMaterial || DirtTextureMaterial);
 			switch (Cell.GroundType)
 			{
 			case EPSTileType::Grass:
@@ -373,18 +390,121 @@ UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateFarmCom
 	return Instances;
 }
 
+void APSTileChunkActor::SetActorHiddenInGame(bool bNewHidden)
+{
+	Super::SetActorHiddenInGame(bNewHidden);
+	if (ChunkNativeWater) if (auto* Body=ChunkNativeWater->GetChildActor()) Body->SetActorHiddenInGame(bNewHidden);
+}
+
+float APSTileChunkActor::GetNativeWaterSurfaceOffset(UWorld* World, FVector Position)
+{
+	const auto* Defaults=GetDefault<APSTileChunkActor>();
+	const auto* Waves=Defaults->NativeWaves ? Defaults->NativeWaves->GetWaterWaves() : nullptr;
+	if (!Waves) return 0;
+	const float Depth=FMath::Max(20.f,Waves->GetMaxWaveHeight()+2.f);
+	const auto* Subsystem=World ? World->GetSubsystem<UWaterSubsystem>() : nullptr;
+	const float Time=Subsystem ? Subsystem->GetWaterTimeSeconds() : 0;
+	const float MaskDepth=GetDefault<AWaterBodyCustom>()->GetWaterBodyComponent()->TargetWaveMaskDepth;
+	return -Depth + Waves->GetSimpleWaveHeightAtPosition(Position,512,Time)
+		* Waves->GetWaveAttenuationFactor(Position,512,MaskDepth);
+}
+
+void APSTileChunkActor::UpdateNativeWater(const FPSChunkData& Data, int32 Size, float CellSize, bool bEnabled)
+{
+	FIntPoint Min(Size,Size),Max(0,0),ValidMin(Size,Size),ValidMax(0,0);
+	bool bHasWater=false;
+	if (Size>0 && int64(Size)*Size==Data.Cells.Num() && FMath::IsFinite(CellSize) && CellSize>0)
+		for(int32 Y=0;Y<Size;++Y) for(int32 X=0;X<Size;++X)
+		{
+			const auto& Cell=Data.Cells[Y*Size+X];
+			if(Cell.GroundType!=EPSTileType::Empty)
+			{
+				ValidMin.X=FMath::Min(ValidMin.X,X); ValidMin.Y=FMath::Min(ValidMin.Y,Y);
+				ValidMax.X=FMath::Max(ValidMax.X,X+1); ValidMax.Y=FMath::Max(ValidMax.Y,Y+1);
+			}
+			if(Cell.GroundType==EPSTileType::Water || (Cell.bFixedVariant && Cell.bWaterArtwork))
+			{
+				bHasWater=true;
+				Min.X=FMath::Min(Min.X,X); Min.Y=FMath::Min(Min.Y,Y);
+				Max.X=FMath::Max(Max.X,X+1); Max.Y=FMath::Max(Max.Y,Y+1);
+			}
+		}
+	const bool bReady=bEnabled && bHasWater && NativeShoreMaterial && NativeSurfaceMaterial && NativeMesh && NativeWaves && NativeWaves->GetWaterWaves();
+	if(!bReady)
+	{
+		if(ChunkNativeWater) { ChunkNativeWater->DestroyComponent(); ChunkNativeWater=nullptr; }
+		if(bNativeSurfaceActive && OriginalWaterSurface) SetWaterSurfaceOverride(OriginalWaterSurface);
+		bNativeSurfaceActive=false;
+		return;
+	}
+	if(auto* Waves=Cast<UGerstnerWaterWaves>(NativeWaves->GetWaterWaves())) Waves->RecomputeWaves(true);
+	if(!ChunkNativeWater)
+	{
+		ChunkNativeWater=NewObject<UChildActorComponent>(this,NAME_None,RF_Transient);
+		ChunkNativeWater->SetupAttachment(SceneRoot);
+		ChunkNativeWater->SetChildActorClass(AWaterBodyCustom::StaticClass());
+		ChunkNativeWater->RegisterComponent();
+	}
+	auto* Body=Cast<AWaterBodyCustom>(ChunkNativeWater->GetChildActor());
+	if(!Body) return; // Keep original artwork if native actor creation failed.
+	if(!bNativeSurfaceActive) OriginalWaterSurface=WaterSurfaceMaterial;
+	SetWaterSurfaceOverride(NativeShoreMaterial); bNativeSurfaceActive=true;
+	auto* Component=Body->GetWaterBodyComponent();
+	Component->SetMobility(EComponentMobility::Movable);
+	Component->SetCanEverAffectNavigation(false);
+	const float Depth=FMath::Max(20.f,NativeWaves->GetWaterWaves()->GetMaxWaveHeight()+2.f);
+	// Rectangles never overlap adjacent chunks. Opaque land/shore art above
+	// them clips the water silhouette; padding below land covers tilted views.
+	const FVector2D Low(FMath::Max(ValidMin.X,Min.X-1)*CellSize,FMath::Max(ValidMin.Y,Min.Y-1)*CellSize);
+	const FVector2D High(FMath::Min(ValidMax.X,Max.X+1)*CellSize,FMath::Min(ValidMax.Y,Max.Y+1)*CellSize);
+	const FVector MeshSize=NativeMesh->GetBounds().BoxExtent*2;
+	ChunkNativeWater->SetRelativeLocation(FVector((Low.X+High.X)*.5,(Low.Y+High.Y)*.5,RenderZOffset-Depth));
+	ChunkNativeWater->SetRelativeScale3D(FVector((High.X-Low.X)/FMath::Max(1.,MeshSize.X),(High.Y-Low.Y)/FMath::Max(1.,MeshSize.Y),1));
+	Body->SetActorTransform(ChunkNativeWater->GetComponentTransform());
+	Component->SetWaterMeshOverride(NativeMesh); Component->SetWaterMaterial(NativeSurfaceMaterial);
+	if(!Body->GetWaterWaves() || Body->GetWaterWaves()->GetWaterWaves()!=NativeWaves->GetWaterWaves())
+	{
+		auto* Reference=NewObject<UWaterWavesAssetReference>(Body);
+		Reference->SetWaterWavesAsset(NativeWaves); Body->SetWaterWaves(Reference);
+	}
+	FOnWaterBodyChangedParams Changed; Changed.bShapeOrPositionChanged=true; Component->UpdateAll(Changed);
+	for(auto* Mesh : Component->GetStandardRenderableComponents())
+	{
+		Mesh->SetMobility(EComponentMobility::Movable); Mesh->SetWorldTransform(Body->GetActorTransform());
+		Mesh->SetCanEverAffectNavigation(false);
+	}
+	Body->SetActorEnableCollision(false);
+	Body->SetActorHiddenInGame(IsHidden());
+}
+
+void APSTileChunkActor::SetWaterSurfaceOverride(UMaterialInterface* Surface)
+{
+	if (!Surface || WaterSurfaceMaterial == Surface) return;
+	WaterSurfaceMaterial = Surface;
+	for (const auto& Pair : WaterVariantInstances)
+	{
+		if (!Pair.Value || !WaterVariantTextures.IsValidIndex(Pair.Key)) continue;
+		auto* Material = UMaterialInstanceDynamic::Create(Surface, this);
+		Material->SetVectorParameterValue(TEXT("Color"), FLinearColor::White);
+		Material->SetTextureParameterValue(TEXT("SpriteTexture"), WaterVariantTextures[Pair.Key]);
+		Pair.Value->SetMaterial(0, Material);
+		WaterVariantMaterials.Add(Pair.Key, Material);
+	}
+}
+
 UHierarchicalInstancedStaticMeshComponent* APSTileChunkActor::GetOrCreateWaterVariantComponent(const uint8 Variant)
 {
 	if (UHierarchicalInstancedStaticMeshComponent* Existing = WaterVariantInstances.FindRef(Variant))
 		return Existing;
-	if (!WaterVariantTextures.IsValidIndex(Variant) || !WaterVariantTextures[Variant] || !DirtTextureMaterial)
+	UMaterialInterface* Surface = WaterSurfaceMaterial ? WaterSurfaceMaterial.Get() : DirtTextureMaterial.Get();
+	if (!WaterVariantTextures.IsValidIndex(Variant) || !WaterVariantTextures[Variant] || !Surface)
 		return nullptr;
 	const FName Name(*FString::Printf(TEXT("WaterVariant_%u"), Variant));
 	UHierarchicalInstancedStaticMeshComponent* Instances =
 		NewObject<UHierarchicalInstancedStaticMeshComponent>(this, Name, RF_Transient);
 	Instances->SetupAttachment(SceneRoot);
 	ConfigureInstances(Instances);
-	UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(DirtTextureMaterial, this);
+	UMaterialInstanceDynamic* Material = UMaterialInstanceDynamic::Create(Surface, this);
 	Material->SetVectorParameterValue(TEXT("Color"), FLinearColor::White);
 	Material->SetTextureParameterValue(TEXT("SpriteTexture"), WaterVariantTextures[Variant]);
 	Instances->SetMaterial(0, Material);

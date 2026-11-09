@@ -174,10 +174,12 @@ void APSPlayerCharacter::UpdateFishingCamera(const float DeltaSeconds)
 		// Pan on the ground plane; preserve the authored camera height, angle and zoom.
 		DesiredOffset = FVector(Delta.X, Delta.Y, 0);
 	}
-	const float Duration = FMath::Max(0.f, FishingCameraBlendSeconds);
+	const float Duration = GetFishingCameraBlendSeconds();
 	FishingCameraBlendElapsed += FMath::Max(0.f, DeltaSeconds);
 	const float Alpha = Duration > 0 ? FMath::Clamp(FishingCameraBlendElapsed / Duration, 0.f, 1.f) : 1.f;
-	const float SmoothAlpha = Alpha * Alpha * (3 - 2 * Alpha);
+	// Quintic easing starts/ends at zero velocity and acceleration, so the slower
+	// pan accelerates gradually without a sudden push at either end.
+	const float SmoothAlpha = FMath::Clamp(Alpha * Alpha * Alpha * (Alpha * (6 * Alpha - 15) + 10), 0.f, 1.f);
 	FishingCameraOffset = FMath::Lerp(FishingCameraBlendStart, DesiredOffset, SmoothAlpha);
 	if (!bFocus && Alpha >= 1)
 	{

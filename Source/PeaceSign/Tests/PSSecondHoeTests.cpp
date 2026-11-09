@@ -75,14 +75,14 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 	};
 	Controller->SelectHotbarSlot(7);
 	TestEqual(TEXT("Second hoe starts in hotbar eight"), Inventory->GetHotbarSlot(7).ItemId, PSItemIds::SecondUpgradedHoe);
-	TestEqual(TEXT("Second hoe has three charged rows"), Controller->GetEquippedHoeChargeDepth(), 3);
+	TestEqual(TEXT("Second hoe has three charged rows"), Controller->GetEquippedFarmChargeDepth(), 3);
 	TestTrue(TEXT("Second hoe displays its own name"), PSItems::GetDefinition(Inventory->GetHotbarSlot(7)).Name.ToString().Contains(TEXT("2차")));
 	ClearTargets();
 	Step(true, 0);
 	Step(true, 0.49f);
 	Step(false, 0);
 	TestEqual(TEXT("Short second-hoe input still targets one cell"), Controller->FarmActionCells.Num(), 1);
-	Step(false, 0.5f);
+	Step(false, 0.7f);
 	TestEqual(TEXT("Short input tills immediate front"), Grid->GetGroundTile(FIntPoint(-1, 0)), EPSTileType::TilledSoil);
 	TestEqual(TEXT("Short input leaves far row untouched"), Grid->GetGroundTile(FIntPoint(-3, 0)), EPSTileType::Grass);
 	ClearTargets();
@@ -98,8 +98,8 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 	const auto FullRange = Controller->FarmActionCells;
 	TestEqual(TEXT("Release snapshots nine cells"), FullRange.Num(), 9);
 	TestTrue(TEXT("Use phase locks movement"), Farmer->IsMovementLocked());
-	Step(false, 0.49f);
-	TestEqual(TEXT("Use phase has its own half-second delay"), Grid->GetGroundTile(FIntPoint(-1, 0)), EPSTileType::Grass);
+	Step(false, 0.69f);
+	TestEqual(TEXT("Use phase has its own 0.7-second delay"), Grid->GetGroundTile(FIntPoint(-1, 0)), EPSTileType::Grass);
 	Step(false, 0.01f);
 	for (const FIntPoint Cell : FullRange) TestEqual(TEXT("All nine cells are tilled"), Grid->GetGroundTile(Cell), EPSTileType::TilledSoil);
 	TestEqual(TEXT("Nine cells cost one durability per swing"), Inventory->GetHotbarSlot(7).CurrentDurability, 98);
@@ -127,7 +127,7 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("Footprint never includes the standing cell"), Unique.Contains(FIntPoint::ZeroValue));
 		ClearTargets();
 		TestTrue(TEXT("Second hoe can start in each cardinal direction"), Controller->BeginFarmAction(true));
-		Controller->UpdateFarmAction(0.5f);
+		Controller->UpdateFarmAction(0.7f);
 		for (const FIntPoint Cell : Cells) TestEqual(TEXT("Effect matches rotated footprint"), Grid->GetGroundTile(Cell), EPSTileType::TilledSoil);
 	}
 	Farmer->Move(FInputActionValue(FVector2D(0, -1)));
@@ -142,7 +142,7 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Partial range starts with blocked front cell"), Controller->BeginFarmAction(true));
 	// Invalidate another cell after release; the other five must still succeed.
 	SetTile(Cells[3], EPSTileType::Grass, true);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	TestEqual(TEXT("Front stone remains intact"), Grid->GetStoneHealth(Cells[0]), 30);
 	TestEqual(TEXT("Water remains intact"), Grid->GetGroundTile(Cells[1]), EPSTileType::Water);
 	TestEqual(TEXT("Mature crop is protected from charged use"), Grid->GetCropStage(Cells[2]), PSCropGrowth::MaxStage);
@@ -154,7 +154,7 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 	ClearTargets();
 	Controller->BeginFarmAction(true);
 	for (const FIntPoint Cell : Cells) SetTile(Cell, EPSTileType::Water);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	TestEqual(TEXT("Total effect-time failure costs no durability"), Inventory->GetHotbarSlot(7).CurrentDurability, Durability);
 	ClearTargets();
 	Controller->HandleSpecialAttack();
@@ -177,7 +177,7 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 	ClearTargets();
 	const auto EdgeRange = Controller->GetFarmTargetCells(true);
 	Controller->BeginFarmAction(true);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	int32 Inside = 0;
 	for (const FIntPoint Cell : EdgeRange)
 	{
@@ -191,7 +191,7 @@ bool FPSSecondHoeTest::RunTest(const FString& Parameters)
 	Inventory->ConsumeHotbarDurability(7, Inventory->GetHotbarSlot(7).CurrentDurability - 1, bDestroyed);
 	const auto LastRange = Controller->GetFarmTargetCells(true);
 	Controller->BeginFarmAction(true);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	TestEqual(TEXT("Last swing still includes nine cells"), LastRange.Num(), 9);
 	for (const FIntPoint Cell : LastRange) TestEqual(TEXT("Last durability applies entire range"), Grid->GetGroundTile(Cell), EPSTileType::TilledSoil);
 	TestTrue(TEXT("Second hoe breaks after its last full swing"), Inventory->GetHotbarSlot(7).IsEmpty());

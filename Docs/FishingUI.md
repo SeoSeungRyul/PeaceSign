@@ -81,7 +81,7 @@ ResultNameLabel과 ResultSizeLabel을 모두 추가하면 성공 시 기존 Resu
 ## 안내와 입질
 
 - `FishNoticePanel`(Border), `NoticeLabel`(Text Block): 낚시 불가 이유. 기존 X 문자를 지우고 `Fish_Ballon_Cant` 이미지를 배치할 수 있다.
-- `FishBitePanel`(Border): 입질 때 표시. 기존 느낌표 문자를 지우고 `Fish_Ballon_Catch` 이미지를 배치한다. 조작 안내는 작은 Text Block으로 남겨도 된다.
+- `FishBitePanel`(Border): 입질 때 `Fish_Ballon_Catch` 느낌표 이미지만 표시한다. 2026-11-03 사용자 지시로 `F / 우클릭` 안내와 그 작은 배경은 제거했다. 실제 F/우클릭 챔질 입력은 유지한다. `Scripts/RemoveFishingBiteHint.py`는 해당 안내만 기존 WBP에서 제거하며 다른 이미지와 배치는 유지한다.
 - 느낌표 위치는 Class Defaults의 `Fishing|Layout > Bite Offset`으로 조절한다. 기본값은 `(0, -24)`로 찌 바로 위다. 사용 불가 안내의 `Notice Offset`과 별도이며, 작은 화면에서 패널이 잘리지 않도록 화면 가장자리 안쪽으로 보정한다. `Follow Player`가 꺼져 있으면 Designer의 고정 위치를 그대로 사용한다.
 - 입질 대기(1~10초)에는 미니게임 패널과 시간 바 전체를 숨긴다. 대기 시간 자체를 없애지는 않는다. 입질 때 말풍선이 나오며 미니게임에 들어가면 시간 바가 다시 표시된다.
 - `Rod Notice Brush`와 `Water Notice Brush`에는 Fish_Tbg_Cant1/2를 연결했다. 해당 안내는 완성된 문구 이미지를 보여 주고 NoticeLabel은 숨겨 중복을 막는다. 일반 안내는 빈 종이와 NoticeLabel을 사용한다.

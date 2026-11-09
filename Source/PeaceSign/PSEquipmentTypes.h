@@ -14,5 +14,6 @@ enum class EPSEquipment : uint8
 	UnusableItem,
 	Shovel,
 	WateringCan,
-	Axe
+	Axe,
+	TreeSeed
 };

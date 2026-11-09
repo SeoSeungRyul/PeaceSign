@@ -1,13 +1,31 @@
 #include "PSGatheringWorldComponent.h"
 #include "../Data/PSGameDataTables.h"
+#include "../Fishing/PSFishingTypes.h"
 #include "PSGatheringTreeActor.h"
 #include "../World/PSGridWorld.h"
 #include "../Inventory/PSWorldItemActor.h"
 #include "../Inventory/PSInventoryComponent.h"
+#include "../PSPlayerCharacter.h"
+#include "../PSPlayerStatsComponent.h"
 #include "../Time/PSGameTimeSubsystem.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
+
+namespace
+{
+	TOptional<EPSTreeSpecies> GetSeedSpecies(const FPSItemStack& Seed)
+	{
+		if (Seed.IsEmpty() || Seed.ItemType != EPSItemType::TreeSeed) return {};
+		const FName ItemId = UPSGameDataLibrary::CanonicalItemID(Seed.ItemId);
+		for (int32 Index = 0; Index <= static_cast<int32>(EPSTreeSpecies::Cactus); ++Index)
+		{
+			const auto Species = static_cast<EPSTreeSpecies>(Index);
+			if (PSGathering::GetTree(Species).SeedId == ItemId) return Species;
+		}
+		return {};
+	}
+}
 
 UPSGatheringWorldComponent::UPSGatheringWorldComponent()
 {
@@ -23,6 +41,12 @@ FPSTreeRecord* UPSGatheringWorldComponent::FindTree(const FIntPoint Cell)
 bool UPSGatheringWorldComponent::HasTree(const FIntPoint Cell) const
 {
 	return Trees.ContainsByPredicate([Cell](const FPSTreeRecord& Tree) { return Tree.Cell == Cell; });
+}
+
+bool UPSGatheringWorldComponent::OccupiesTreeCell(const FIntPoint Cell) const
+{
+	const auto* Actor = TreeActors.FindRef(Cell).Get();
+	return HasTree(Cell) || (IsValid(Actor) && !Actor->IsActorBeingDestroyed() && Actor->IsFalling());
 }
 
 FPSTreeRecord UPSGatheringWorldComponent::GetTree(const FIntPoint Cell) const
@@ -52,6 +76,15 @@ FPSAxeDefinition UPSGatheringWorldComponent::AxeDefinition(const FName ItemId) c
 	return Result;
 }
 
+UTexture2D* UPSGatheringWorldComponent::GetItemIcon(const FPSItemStack& Item) const
+{
+	FPSItemTableRow Data;
+	if (!UPSGameDataLibrary::FindItem(ItemTable, Item.ItemId, Data) || Data.IconID.IsNone()
+		|| !ItemIconTable || ItemIconTable->GetRowStruct() != FPSIconDefinition::StaticStruct()) return nullptr;
+	const auto* Icon = ItemIconTable->FindRow<FPSIconDefinition>(Data.IconID, TEXT("Gathering item icon lookup"), false);
+	return Icon ? Icon->Image.LoadSynchronous() : nullptr;
+}
+
 int64 UPSGatheringWorldComponent::Now() const
 {
 	const auto* Clock = GetWorld() ? GetWorld()->GetSubsystem<UPSGameTimeSubsystem>() : nullptr;
@@ -71,7 +104,14 @@ void UPSGatheringWorldComponent::SetUnlocked(const bool bValue)
 
 void UPSGatheringWorldComponent::InitializeResources()
 {
-	if (bResourcesInitialized) { RefreshActors(); return; }
+	EnsurePlacedTrees();
+	const bool bMatured = MatureSaplings();
+	if (bResourcesInitialized)
+	{
+		if (bMatured) Persist();
+		RefreshActors();
+		return;
+	}
 	bResourcesInitialized = true;
 	auto* Grid = Cast<APSGridWorld>(GetOwner());
 	if (Grid && bEnableTestArea)
@@ -101,11 +141,61 @@ void UPSGatheringWorldComponent::InitializeResources()
 	RefreshActors();
 }
 
+int32 UPSGatheringWorldComponent::EnsurePlacedTrees()
+{
+	auto* Grid = Cast<APSGridWorld>(GetOwner());
+	if (!Grid) return 0;
+	int32 Added = 0;
+	for (const FPSTreeRecord& Authored : PlacedTrees)
+	{
+		const FName Id = Authored.PlacementId.IsNone()
+			? FName(*FString::Printf(TEXT("Placed.%d.%d"), Authored.Cell.X, Authored.Cell.Y)) : Authored.PlacementId;
+		if (RemovedPlacements.Contains(Id)
+			|| Trees.ContainsByPredicate([Id](const FPSTreeRecord& Tree) { return Tree.PlacementId == Id; })) continue;
+		bool bPlaced = false;
+		for (int32 Radius = 0; Radius <= 4 && !bPlaced; ++Radius)
+			for (int32 X = -Radius; X <= Radius && !bPlaced; ++X)
+				for (int32 Y = -Radius; Y <= Radius && !bPlaced; ++Y)
+				{
+					if (FMath::Max(FMath::Abs(X), FMath::Abs(Y)) != Radius) continue;
+					const FIntPoint Cell = Authored.Cell + FIntPoint(X,Y);
+					if (!Grid->CanPlaceGatheringTree(Cell) || Trees.ContainsByPredicate([Cell](const FPSTreeRecord& Other)
+						{ return FMath::Abs(Other.Cell.X-Cell.X)<3 && FMath::Abs(Other.Cell.Y-Cell.Y)<3; })) continue;
+					bool bApproachable = false;
+					for (const FIntPoint Delta : {FIntPoint(1,0),FIntPoint(-1,0),FIntPoint(0,1),FIntPoint(0,-1)})
+					{
+						const FIntPoint Side = Cell + Delta;
+						const auto Ground = Grid->GetGroundTile(Side);
+						bApproachable |= (Ground == EPSTileType::Grass || Ground == EPSTileType::Dirt)
+							&& Grid->GetWorldObjectType(Side) == EPSWorldObjectType::None;
+					}
+					if (!bApproachable) continue;
+					FPSTreeRecord Tree; Tree.Cell = Cell; Tree.Species = Authored.Species;
+					Tree.Health = Definition(Tree.Species).MaxHealth; Tree.PlacementId = Id;
+					Trees.Add(Tree); ++Added; bPlaced = true;
+				}
+	}
+	if (Added > 0) Persist();
+	return Added;
+}
+
 void UPSGatheringWorldComponent::Restore(const TArray<FPSTreeRecord>& InTrees, const TArray<FPSGatheringDrop>& InDrops,
-	const bool bInitialized, const bool bSavedUnlocked)
+	const bool bInitialized, const bool bSavedUnlocked, const TSet<FName>& InRemovedPlacements)
 {
 	ClearActors();
-	Trees = InTrees;
+	RemovedPlacements = InRemovedPlacements;
+	Trees.Reset(InTrees.Num());
+	for (const auto& Tree : InTrees)
+	{
+		if (Tree.Health <= 0)
+		{
+			// Older saves kept stumps as trees. Only their authored identity still matters.
+			if (!Tree.PlacementId.IsNone()) RemovedPlacements.Add(Tree.PlacementId);
+			continue;
+		}
+		auto& Restored = Trees.Add_GetRef(Tree);
+		if (Restored.IsSapling()) Restored.Health = FMath::Min(Restored.Health, PSGathering::SaplingHealth);
+	}
 	Drops = InDrops;
 	for (auto& Drop : Drops) Drop.Item.ItemId = UPSGameDataLibrary::CanonicalItemID(Drop.Item.ItemId);
 	bResourcesInitialized = bInitialized;
@@ -124,6 +214,7 @@ void UPSGatheringWorldComponent::ResetResources()
 {
 	ClearActors();
 	Trees.Reset();
+	RemovedPlacements.Reset();
 	Drops.Reset();
 	bResourcesInitialized = false;
 	InitializeResources();
@@ -131,13 +222,21 @@ void UPSGatheringWorldComponent::ResetResources()
 
 void UPSGatheringWorldComponent::AddDrop(const FIntPoint Cell, const EPSItemType Type, const FName ItemId, const int32 Quantity, const float RevealDelay)
 {
-	if (Quantity <= 0) return;
+	FPSItemStack Item;
+	Item.ItemType = Type;
+	Item.ItemId = ItemId;
+	Item.Quantity = Quantity;
+	AddDropStack(Cell, Item, RevealDelay);
+}
+
+void UPSGatheringWorldComponent::AddDropStack(const FIntPoint Cell, const FPSItemStack& Item, const float RevealDelay)
+{
+	if (Item.IsEmpty()) return;
 	FPSGatheringDrop Drop;
 	Drop.Id = FGuid::NewGuid();
 	Drop.Cell = Cell;
-	Drop.Item.ItemType = Type;
-	Drop.Item.ItemId = UPSGameDataLibrary::CanonicalItemID(ItemId);
-	Drop.Item.Quantity = Quantity;
+	Drop.Item = Item;
+	Drop.Item.ItemId = UPSGameDataLibrary::CanonicalItemID(Item.ItemId);
 	Drop.RevealAtWorldSeconds = GetWorld()->GetTimeSeconds() + RevealDelay;
 	Drops.Add(Drop);
 }
@@ -145,6 +244,7 @@ void UPSGatheringWorldComponent::AddDrop(const FIntPoint Cell, const EPSItemType
 bool UPSGatheringWorldComponent::ValidateRewardData(const FIntPoint Cell, const bool bChopping, FString& Error) const
 {
 	Error.Reset();
+	if (bChopping && GetTree(Cell).IsSapling()) return true;
 	if (!UsesDropTables()) return true; // Legacy worlds without the three tables retain prototype rewards.
 	if (!UPSGameDataLibrary::ValidateTreeTables(ItemTable, TreeCutDropTable, TreeShakeDropTable, Error)) return false;
 	const auto Data = Definition(GetTree(Cell).Species);
@@ -153,17 +253,66 @@ bool UPSGatheringWorldComponent::ValidateRewardData(const FIntPoint Cell, const 
 		: UPSGameDataLibrary::RollTreeShakeDrop(ItemTable, TreeShakeDropTable, Data.ShakeDropID, 0, Preview, Error);
 }
 
-bool UPSGatheringWorldComponent::Strike(const FIntPoint Cell, const FPSAxeDefinition& Axe)
+bool UPSGatheringWorldComponent::CanPlantSeed(const APawn* Pawn, const FIntPoint Cell, const FPSItemStack& Seed) const
 {
-	auto* Tree = FindTree(Cell);
-	if (!IsUnlocked() || !Tree || Tree->Health <= 0 || Axe.Damage <= 0) return false;
-	const int32 NextHealth = FMath::Max(0, Tree->Health - Axe.Damage);
-	TArray<FPSItemStack> Rewards;
-	const int32 Seed = GetTypeHash(Cell) ^ CastChecked<APSGridWorld>(GetOwner())->GetGatheringSeed() ^ Tree->RewardSequence;
-	FRandomStream Random(Seed ^ 0x17365AB);
-	if (NextHealth == 0)
+	const auto* Grid = Cast<APSGridWorld>(GetOwner());
+	if (!Grid || !IsValid(Pawn) || !IsUnlocked() || !GetSeedSpecies(Seed).IsSet()) return false;
+	const auto Ground = Grid->GetGroundTile(Cell);
+	return (Ground == EPSTileType::Grass || Ground == EPSTileType::Water)
+		&& Grid->GetWorldObjectType(Cell) == EPSWorldObjectType::None && Grid->GetCropType(Cell) == EPSCropType::None
+		&& CanReachCell(Grid->WorldToCell(Pawn->GetActorLocation()), Cell, Pawn);
+}
+
+bool UPSGatheringWorldComponent::PlantSeed(const APawn* Pawn, const FIntPoint Cell,
+	UPSInventoryComponent* Inventory, const int32 HotbarSlot)
+{
+	if (!IsValid(Inventory)) return false;
+	const FPSItemStack Seed = Inventory->GetHotbarSlot(HotbarSlot);
+	if (!CanPlantSeed(Pawn, Cell, Seed)) return false;
+
+	FPSTreeRecord Tree;
+	Tree.Cell = Cell;
+	Tree.Species = GetSeedSpecies(Seed).GetValue();
+	Tree.Health = PSGathering::SaplingHealth;
+	Tree.MaturesAtHalfHour = Now() + PSGathering::SaplingGrowthTime;
+	Trees.Add(Tree);
+	if (!Inventory->RemoveFromHotbarSlot(HotbarSlot, 1))
 	{
-		const auto Data = Definition(Tree->Species);
+		Trees.Pop();
+		return false;
+	}
+	Persist();
+	RefreshActors();
+	return true;
+}
+
+bool UPSGatheringWorldComponent::MatureSaplings()
+{
+	const int64 Time = Now();
+	bool bChanged = false;
+	for (auto& Tree : Trees)
+	{
+		if (!Tree.IsSapling() || Time < Tree.MaturesAtHalfHour) continue;
+		Tree.MaturesAtHalfHour = -1;
+		Tree.Health = Definition(Tree.Species).MaxHealth;
+		if (auto* Actor = TreeActors.FindRef(Tree.Cell).Get()) ConfigureTreeActor(Actor, Tree);
+		bChanged = true;
+	}
+	return bChanged;
+}
+
+bool UPSGatheringWorldComponent::Strike(const FIntPoint Cell, const FPSAxeDefinition& Axe, const APawn* Interactor)
+{
+	const int32 Index = Trees.IndexOfByPredicate([Cell](const FPSTreeRecord& Tree) { return Tree.Cell == Cell; });
+	if (!IsUnlocked() || Index == INDEX_NONE || Axe.Damage <= 0) return false;
+	auto& Tree = Trees[Index];
+	const int32 NextHealth = FMath::Max(0, Tree.Health - Axe.Damage);
+	TArray<FPSItemStack> Rewards;
+	if (NextHealth == 0 && !Tree.IsSapling())
+	{
+		const auto Data = Definition(Tree.Species);
+		const int32 Seed = GetTypeHash(Cell) ^ CastChecked<APSGridWorld>(GetOwner())->GetGatheringSeed() ^ Tree.RewardSequence;
+		FRandomStream Random(Seed ^ 0x17365AB);
 		if (UsesDropTables())
 		{
 			FString Error;
@@ -180,23 +329,29 @@ bool UPSGatheringWorldComponent::Strike(const FIntPoint Cell, const FPSAxeDefini
 			Seeds.Quantity = Data.SeedQuantity; Rewards.Add(Seeds);
 		}
 	}
-	Tree->Health = NextHealth;
-	if (auto* Actor = TreeActors.FindRef(Cell).Get()) Actor->React(Tree->Health == 0);
-	if (Tree->Health == 0)
+	Tree.Health = NextHealth;
+	if (auto* Actor = TreeActors.FindRef(Cell).Get()) Actor->React(NextHealth == 0);
+	if (NextHealth == 0)
 	{
-		++Tree->RewardSequence;
-		for (const auto& Reward : Rewards) AddDrop(Cell, Reward.ItemType, Reward.ItemId, Reward.Quantity, 0.6f);
+		if (!Tree.PlacementId.IsNone()) RemovedPlacements.Add(Tree.PlacementId);
+		Trees.RemoveAt(Index);
+		if (!Rewards.IsEmpty())
+		{
+			const FIntPoint DropCell = GetDropCell(Cell, Interactor);
+			for (const auto& Reward : Rewards)
+				AddDrop(DropCell, Reward.ItemType, Reward.ItemId, Reward.Quantity, APSGatheringTreeActor::FallDuration);
+		}
 	}
 	Persist(); // Pending rewards survive even if actor spawning fails.
 	RefreshActors();
 	return true;
 }
 
-bool UPSGatheringWorldComponent::Shake(const FIntPoint Cell, bool* bOutHadReward)
+bool UPSGatheringWorldComponent::Shake(const FIntPoint Cell, bool* bOutHadReward, const APawn* Interactor)
 {
 	if (bOutHadReward) *bOutHadReward = false;
 	auto* Tree = FindTree(Cell);
-	if (!IsUnlocked() || !Tree || Tree->Health <= 0) return false;
+	if (!IsUnlocked() || !Tree || Tree->IsSapling() || Tree->Health <= 0) return false;
 	if (auto* Actor = TreeActors.FindRef(Cell).Get()) Actor->React(false);
 	if (Now() < Tree->NextShakeHalfHour) return false;
 	const auto Data = Definition(Tree->Species);
@@ -215,21 +370,37 @@ bool UPSGatheringWorldComponent::Shake(const FIntPoint Cell, bool* bOutHadReward
 	}
 	Tree->NextShakeHalfHour = Now() + PSGathering::ShakeCooldown;
 	++Tree->RewardSequence;
-	for (const auto& Reward : Rewards) AddDrop(Cell, Reward.ItemType, Reward.ItemId, Reward.Quantity);
+	const FIntPoint DropCell = GetDropCell(Cell, Interactor);
+	for (const auto& Reward : Rewards) AddDrop(DropCell, Reward.ItemType, Reward.ItemId, Reward.Quantity);
 	if (bOutHadReward) *bOutHadReward = !Rewards.IsEmpty();
 	Persist();
+	if (const auto* Player = Cast<APSPlayerCharacter>(Interactor))
+	{
+		auto* Stats = Player->StatsComponent.Get();
+		if (Stats && Rewards.ContainsByPredicate([](const FPSItemStack& Reward) { return Reward.ItemId == TEXT("030208"); }))
+		{
+			const float Damage = FMath::CeilToFloat(Stats->MaxHealth * 0.05f);
+			Stats->ApplyDamage(FMath::Min(Damage, Stats->Health - 1.0f));
+		}
+	}
 	RefreshActors();
 	return true;
 }
 
 bool UPSGatheringWorldComponent::CanReach(const FIntPoint From, const FIntPoint Target, const AActor* Interactor) const
 {
+	return HasTree(Target) && CanReachCell(From, Target, Interactor);
+}
+
+bool UPSGatheringWorldComponent::CanReachCell(const FIntPoint From, const FIntPoint Target, const AActor* Interactor) const
+{
 	const auto* Grid = Cast<APSGridWorld>(GetOwner());
-	if (!Grid || !HasTree(Target)) return false;
+	if (!Grid) return false;
 	const FIntPoint Delta = Target - From;
 	const int32 Distance = FMath::Abs(Delta.X) + FMath::Abs(Delta.Y);
 	const auto Ground = Grid->GetGroundTile(From);
-	if (Distance < 1 || Distance > 2 || Ground == EPSTileType::Empty || Ground == EPSTileType::Water) return false;
+	if (Distance < 1 || Distance > 2 || Ground == EPSTileType::Empty || Ground == EPSTileType::Water
+		|| Ground == EPSTileType::Stone) return false;
 	if (FMath::Max(FMath::Abs(Delta.X), FMath::Abs(Delta.Y)) == 2)
 	{
 		const FIntPoint Between = From + FIntPoint(Delta.X / 2, Delta.Y / 2);
@@ -242,9 +413,34 @@ bool UPSGatheringWorldComponent::CanReach(const FIntPoint From, const FIntPoint 
 	FCollisionQueryParams Query(SCENE_QUERY_STAT(GatheringReach), false);
 	Query.AddIgnoredActor(Interactor ? Interactor : UGameplayStatics::GetPlayerPawn(this, 0));
 	if (const auto* TreeActor = TreeActors.FindRef(Target).Get()) Query.AddIgnoredActor(TreeActor);
-	if (GetWorld()->LineTraceTestByChannel(Grid->CellToWorldCenter(From) + FVector(0, 0, 50),
-		Grid->CellToWorldCenter(Target) + FVector(0, 0, 50), ECC_Pawn, Query)) return false;
+	const FVector Start = Grid->CellToWorldCenter(From) + FVector(0, 0, 50);
+	FVector End = Grid->CellToWorldCenter(Target) + FVector(0, 0, 50);
+	if (Grid->GetGroundTile(Target) == EPSTileType::Water)
+	{
+		// Stop just before the target's water collider. Any intervening blocker still counts.
+		const float Cells = FMath::Max(FMath::Abs(Delta.X), FMath::Abs(Delta.Y));
+		End -= (End - Start) * (0.51f / Cells);
+	}
+	if (GetWorld()->LineTraceTestByChannel(Start, End, ECC_Pawn, Query)) return false;
 	return true;
+}
+
+FIntPoint UPSGatheringWorldComponent::GetDropCell(const FIntPoint TreeCell, const APawn* Interactor) const
+{
+	const auto* Grid = CastChecked<APSGridWorld>(GetOwner());
+	if (Grid->GetGroundTile(TreeCell) != EPSTileType::Water) return TreeCell;
+	if (Interactor)
+	{
+		const FIntPoint Shore = Grid->WorldToCell(Interactor->GetActorLocation());
+		if (CanReachCell(Shore, TreeCell, Interactor)) return Shore;
+	}
+	// Direct callers without a pawn can still fell or shake a water tree.
+	for (const FIntPoint Direction : {FIntPoint(1, 0), FIntPoint(-1, 0), FIntPoint(0, 1), FIntPoint(0, -1)})
+	{
+		const FIntPoint Shore = TreeCell + Direction;
+		if (Grid->GetWorldObjectType(Shore) == EPSWorldObjectType::None && CanReachCell(Shore, TreeCell, Interactor)) return Shore;
+	}
+	return TreeCell;
 }
 
 bool UPSGatheringWorldComponent::CollectDrop(const FGuid Id, UPSInventoryComponent* Inventory)
@@ -259,6 +455,26 @@ bool UPSGatheringWorldComponent::CollectDrop(const FGuid Id, UPSInventoryCompone
 	DropActors.Remove(Id);
 	Persist();
 	return true;
+}
+
+void UPSGatheringWorldComponent::DropItem(const FIntPoint Cell, const EPSItemType Type, const FName ItemId, const int32 Quantity)
+{
+	AddDrop(Cell, Type, ItemId, Quantity);
+	Persist();
+	RefreshActors();
+}
+
+void UPSGatheringWorldComponent::DropItemStack(const FIntPoint Cell, const FPSItemStack& Item)
+{
+	AddDropStack(Cell, Item);
+	Persist();
+	RefreshActors();
+}
+
+void UPSGatheringWorldComponent::ConfigureTreeActor(APSGatheringTreeActor* Actor, const FPSTreeRecord& Tree) const
+{
+	Actor->Configure(Tree, CastChecked<APSGridWorld>(GetOwner())->GetCellSize(),
+		TreeSprites.FindRef(Tree.Species), SpriteHeightInCells);
 }
 
 void UPSGatheringWorldComponent::RefreshActors()
@@ -279,18 +495,21 @@ void UPSGatheringWorldComponent::RefreshActors()
 	{
 		if (!Visible(Tree.Cell) || TreeActors.Contains(Tree.Cell)) continue;
 		auto* Actor = GetWorld()->SpawnActor<APSGatheringTreeActor>(Grid->CellToWorldCenter(Tree.Cell), FRotator::ZeroRotator);
-		if (Actor) { Actor->Configure(Tree, Grid->GetCellSize()); TreeActors.Add(Tree.Cell, Actor); }
+		if (Actor) { ConfigureTreeActor(Actor, Tree); TreeActors.Add(Tree.Cell, Actor); }
 	}
 	// FinishSpawning can trigger immediate overlaps. Iterate a copy to avoid invalidated arrays.
 	const TArray<FPSGatheringDrop> Snapshot = Drops;
 	for (const auto& Drop : Snapshot)
 	{
 		if (!Visible(Drop.Cell) || DropActors.Contains(Drop.Id) || GetWorld()->GetTimeSeconds() < Drop.RevealAtWorldSeconds) continue;
-		const FVector Offset = Drop.Item.ItemType == EPSItemType::TreeSeed ? FVector(25, 0, 18) : FVector(-25, 0, 18);
+		const float Side = Drop.Item.ItemType == EPSItemType::TreeSeed ? 0.29f : -0.29f;
+		const float CellSize = Grid->GetCellSize();
+		const FVector Offset = FVector(-0.28f, Side, 0.18f) * CellSize;
 		const FTransform Transform(FRotator::ZeroRotator, Grid->CellToWorldCenter(Drop.Cell) + Offset);
 		auto* Actor = GetWorld()->SpawnActorDeferred<APSWorldItemActor>(APSWorldItemActor::StaticClass(), Transform);
 		if (!Actor) continue;
-		Actor->InitializeGatheringItem(Drop.Item, this, Drop.Id);
+		const bool bPlayHop = Drop.RevealAtWorldSeconds > 0 && GetWorld()->GetTimeSeconds() < Drop.RevealAtWorldSeconds + 0.5;
+		Actor->InitializeGatheringItem(Drop.Item, this, Drop.Id, GetItemIcon(Drop.Item), CellSize, bPlayHop);
 		DropActors.Add(Drop.Id, Actor);
 		Actor->FinishSpawning(Transform);
 	}

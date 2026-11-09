@@ -33,10 +33,10 @@ namespace
 		return MakeDefinition(Name, TEXT("제작 재료\n제련하여 주괴로 만드는 광석입니다."), 999, Color, 4);
 	}
 
-	FPSItemDefinition MakeUpgradedHoeDefinition(const TCHAR* Name, const TCHAR* Description, const TCHAR* Color, const int32 Depth)
+	FPSItemDefinition MakeFarmToolDefinition(const TCHAR* Name, const TCHAR* Description, const TCHAR* Color, const int32 Icon, const int32 Depth = 0)
 	{
-		FPSItemDefinition Result = MakeDefinition(Name, Description, 1, Color, 0, 100);
-		Result.ChargedHoeDepth = Depth;
+		FPSItemDefinition Result = MakeDefinition(Name, Description, 1, Color, Icon, 100);
+		Result.FarmChargeDepth = Depth;
 		return Result;
 	}
 }
@@ -44,9 +44,9 @@ namespace
 const FPSItemDefinition& PSItems::GetDefinition(const EPSItemType ItemType, const FName ItemId)
 {
 	static const FPSItemDefinition Empty = MakeDefinition(TEXT("빈 슬롯"), TEXT("아이템을 이곳으로 끌어 놓으세요."), 0, TEXT("FFFFFF"), 0);
-	static const FPSItemDefinition Hoe = MakeDefinition(TEXT("괭이"), TEXT("도구\n밭을 가꾸는 데 사용하는 기본 도구입니다."), 1, TEXT("BFD3C5"), 0, 100);
-	static const FPSItemDefinition UpgradedHoe = MakeUpgradedHoeDefinition(TEXT("1차 강화 괭이"), TEXT("임시 도구\n짧게 우클릭하면 앞 1칸, 0.5초 이상 누르고 떼면 전방 가로 3칸을 갑니다."), TEXT("E5AF68"), 1);
-	static const FPSItemDefinition SecondUpgradedHoe = MakeUpgradedHoeDefinition(TEXT("2차 강화 괭이"), TEXT("임시 도구\n짧게 우클릭하면 앞 1칸, 0.5초 이상 누르고 떼면 전방 3×3칸을 갑니다."), TEXT("B99BFF"), 3);
+	static const FPSItemDefinition Hoe = MakeFarmToolDefinition(TEXT("괭이"), TEXT("도구\n밭을 가꾸는 데 사용하는 기본 도구입니다."), TEXT("BFD3C5"), 0);
+	static const FPSItemDefinition UpgradedHoe = MakeFarmToolDefinition(TEXT("1차 강화 괭이"), TEXT("임시 도구\n짧게 우클릭하면 앞 1칸, 0.5초 이상 누르고 떼면 전방 가로 3칸을 갑니다."), TEXT("E5AF68"), 0, 1);
+	static const FPSItemDefinition SecondUpgradedHoe = MakeFarmToolDefinition(TEXT("2차 강화 괭이"), TEXT("임시 도구\n짧게 우클릭하면 앞 1칸, 0.5초 이상 누르고 떼면 전방 3×3칸을 갑니다."), TEXT("B99BFF"), 0, 3);
 	static const FPSItemDefinition Shovel = MakeDefinition(TEXT("삽"), TEXT("도구\n우클릭으로 풀과 흙을 서로 바꿉니다."), 1, TEXT("B9C4CE"), 7, 100);
 	static const FPSItemDefinition Seed = MakeDefinition(TEXT("씨앗"), TEXT("농사 재료\n갈아 놓은 땅에 심을 작은 씨앗입니다."), 999, TEXT("A8C66C"), 1);
 	static const FPSItemDefinition Crop = MakeDefinition(TEXT("수확한 작물"), TEXT("식량\n정성껏 가꾼 밭에서 거둔 작물입니다."), 999, TEXT("ECAC62"), 2);
@@ -107,21 +107,39 @@ const FPSItemDefinition& PSItems::GetDefinition(const EPSItemType ItemType, cons
 	}
 	case EPSItemType::GatheredFruit:
 	{
+		static const FPSItemDefinition Strawberry = MakeDefinition(TEXT("야생딸기"), TEXT("채집물\n풀 타일의 덤불에서 얻은 야생딸기입니다."), 999, TEXT("E35A6C"), 2);
+		static const FPSItemDefinition Blackberry = MakeDefinition(TEXT("블랙베리"), TEXT("채집물\n풀 타일의 덤불에서 얻은 블랙베리입니다."), 999, TEXT("75618C"), 2);
+		if (ItemId == TEXT("Forage.WildStrawberry")) return Strawberry;
+		if (ItemId == TEXT("Forage.Blackberry")) return Blackberry;
 		static const FPSItemDefinition Apple = MakeDefinition(TEXT("사과"), TEXT("채집물\n나무를 흔들어 얻은 사과입니다."), 999, TEXT("DF7050"), 2);
 		static const FPSItemDefinition Chestnut = MakeDefinition(TEXT("밤"), TEXT("채집물\n나무를 흔들어 얻은 밤입니다."), 999, TEXT("A7784A"), 1);
 		return ItemId == TEXT("030208") ? Chestnut : Apple;
 	}
 	case EPSItemType::WateringCan:
 	{
-		static const FPSItemDefinition Can = MakeDefinition(TEXT("물뿌리개"), TEXT("도구\n우클릭으로 밭에 물을 줍니다. 다음 날 오전 6시에 마릅니다."), 1, TEXT("65BCE8"), 8);
+		static const FPSItemDefinition Can = MakeFarmToolDefinition(TEXT("물뿌리개"), TEXT("도구\n우클릭으로 밭에 물을 줍니다. 다음 날 오전 6시에 마릅니다."), TEXT("65BCE8"), 8);
+		static const FPSItemDefinition UpgradedCan = MakeFarmToolDefinition(TEXT("1차 강화 물뿌리개"),
+			TEXT("임시 도구\n짧게 우클릭하면 앞 1칸, 0.5초 이상 누르고 떼면 전방 가로 3칸에 물을 줍니다."), TEXT("75CDBE"), 8, 1);
+		static const FPSItemDefinition SecondUpgradedCan = MakeFarmToolDefinition(TEXT("2차 강화 물뿌리개"),
+			TEXT("임시 도구\n짧게 우클릭하면 앞 1칸, 0.5초 이상 누르고 떼면 전방 3×3칸에 물을 줍니다."), TEXT("B99BFF"), 8, 3);
+		if (ItemId == PSItemIds::SecondUpgradedWateringCan) return SecondUpgradedCan;
+		if (ItemId == PSItemIds::UpgradedWateringCan) return UpgradedCan;
 		return Can;
 	}
 	case EPSItemType::Hoe:
 		if (ItemId == PSItemIds::SecondUpgradedHoe) return SecondUpgradedHoe;
 		return ItemId == PSItemIds::UpgradedHoe ? UpgradedHoe : Hoe;
 	case EPSItemType::Shovel: return Shovel;
-	case EPSItemType::TestSeed: return Seed;
-	case EPSItemType::TestCrop: return Crop;
+	case EPSItemType::TestSeed:
+	{
+		static const auto LettuceSeed = MakeDefinition(TEXT("상추 씨앗"), TEXT("봄에 심는 씨앗. 농사 레벨 1이 필요합니다."), 999, TEXT("AFB87A"), 1);
+		return ItemId == PSItemIds::LettuceSeed ? LettuceSeed : Seed;
+	}
+	case EPSItemType::TestCrop:
+	{
+		static const auto Lettuce = MakeDefinition(TEXT("상추"), TEXT("밭에서 수확한 상추입니다."), 999, TEXT("6CA74F"), 2);
+		return ItemId == PSItemIds::Lettuce ? Lettuce : Crop;
+	}
 	case EPSItemType::Wood:
 	{
 		static const TArray<FPSItemDefinition> Logs = []
@@ -205,10 +223,4 @@ bool PSItems::UsesDurability(const FPSItemStack& Stack)
 bool PSItems::IsValid(const EPSItemType ItemType)
 {
 	return ItemType > EPSItemType::None && ItemType <= EPSItemType::GatheredFruit;
-}
-
-bool PSItems::CanChargeHoe(const FPSItemStack& Stack)
-{
-	return !Stack.IsEmpty() && Stack.ItemType == EPSItemType::Hoe && GetDefinition(Stack).ChargedHoeDepth > 0
-		&& Stack.CurrentDurability > 0;
 }

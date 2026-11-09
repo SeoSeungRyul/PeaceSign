@@ -44,7 +44,11 @@ struct FPSTreeRecord
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame) int32 Health = 60;
 	UPROPERTY(BlueprintReadOnly, SaveGame) int64 NextShakeHalfHour = -1;
 	UPROPERTY(BlueprintReadOnly, SaveGame) int32 RewardSequence = 0;
-	// Health 0 is a persistent stump. Regrowth is the next implementation stage.
+	/** Stable authored placement identity; prevents respawning a felled showcase tree. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, SaveGame) FName PlacementId;
+	/** A nonnegative deadline marks a sapling. Old saves default to a mature tree or stump. */
+	UPROPERTY(BlueprintReadOnly, SaveGame) int64 MaturesAtHalfHour = -1;
+	bool IsSapling() const { return MaturesAtHalfHour >= 0; }
 };
 
 USTRUCT()
@@ -61,6 +65,12 @@ struct FPSGatheringDrop
 namespace PSGathering
 {
 	inline constexpr int64 ShakeCooldown = 7 * 48;
+	inline constexpr int64 SaplingGrowthTime = 2 * 48;
+	inline constexpr int32 SaplingHealth = 10;
+	inline float GetShakeAngle(const float Progress)
+	{
+		return FMath::Sin(Progress * UE_PI * 4) * (1 - Progress) * 7;
+	}
 	PEACESIGN_API FName AxeId(int32 Tier);
 	PEACESIGN_API FPSAxeDefinition GetAxe(FName ItemId);
 	PEACESIGN_API FPSTreeDefinition GetTree(EPSTreeSpecies Species);

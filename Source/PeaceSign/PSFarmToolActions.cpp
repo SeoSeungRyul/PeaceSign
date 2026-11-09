@@ -1,11 +1,12 @@
 #include "PSPlayerController.h"
 #include "Gathering/PSGatheringActionComponent.h"
+#include "Gathering/PSBushInteractionComponent.h"
+#include "Gathering/PSGatheringWorldComponent.h"
 #include "PSPlayerCharacter.h"
 #include "PSPlayerStatsComponent.h"
 #include "Inventory/PSInventoryComponent.h"
 #include "World/PSFarmTargetMarker.h"
 #include "World/PSGridWorld.h"
-#include "World/PSCropGrowth.h"
 #include "Blueprint/WidgetBlueprintLibrary.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -14,18 +15,20 @@ namespace
 {
 	bool IsFarmSuccess(const EPSTileInteractionResult Result)
 	{
-		return Result == EPSTileInteractionResult::Tilled || Result == EPSTileInteractionResult::Watered
-			|| Result == EPSTileInteractionResult::Harvested;
+		return Result == EPSTileInteractionResult::Tilled || Result == EPSTileInteractionResult::Watered;
 	}
 	void ShowFarmResult(const EPSTileInteractionResult Result)
 	{
 		if (!GEngine) return;
 		const TCHAR* Message = Result == EPSTileInteractionResult::Tilled ? TEXT("밭을 갈았습니다.")
 			: Result == EPSTileInteractionResult::Watered ? TEXT("밭에 물을 주었습니다.")
-			: Result == EPSTileInteractionResult::Harvested ? TEXT("작물을 수확했습니다.")
-			: Result == EPSTileInteractionResult::InventoryFull ? TEXT("가방이 가득 찼습니다.")
 			: TEXT("이 칸에는 도구를 사용할 수 없습니다.");
 		GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2, IsFarmSuccess(Result) ? FColor::Green : FColor::Red, Message);
+	}
+
+	void ShowInsufficientFarmStamina()
+	{
+		if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2, FColor::Red, TEXT("농사 도구를 사용할 SP가 부족합니다."));
 	}
 }
 
@@ -45,29 +48,18 @@ EPSTileInteractionResult APSPlayerController::EvaluateFarmTarget(const FIntPoint
 {
 	if (!IsValid(GridWorld)) return EPSTileInteractionResult::InvalidCell;
 	const FPSItemStack* Item = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
-	if (!Item || Item->IsEmpty()) return EPSTileInteractionResult::NoEffect;
+	if (!Item || Item->IsEmpty() || (PSItems::UsesDurability(*Item) && Item->CurrentDurability <= 0))
+		return EPSTileInteractionResult::NoEffect;
 	if (Equipment == EPSEquipment::WateringCan && Item->ItemType == EPSItemType::WateringCan)
 		return GridWorld->CanWaterCell(Cell) ? EPSTileInteractionResult::Watered : EPSTileInteractionResult::NoEffect;
-	if (Equipment != EPSEquipment::Hoe || Item->ItemType != EPSItemType::Hoe
-		|| (PSItems::UsesDurability(*Item) && Item->CurrentDurability <= 0)) return EPSTileInteractionResult::NoEffect;
-	if (GridWorld->GetWorldObjectType(Cell) != EPSWorldObjectType::None) return EPSTileInteractionResult::NoEffect;
-	// Keep the existing temporary hoe harvest as an explicit exception to tilling.
-	if (GridWorld->GetCropType(Cell) != EPSCropType::None && GridWorld->GetCropStage(Cell) >= PSCropGrowth::MaxStage)
-		return InventoryComponent->CanAddItem(EPSItemType::TestCrop, 1, GridWorld->GetCropId(Cell))
-			? EPSTileInteractionResult::Harvested : EPSTileInteractionResult::InventoryFull;
+	if (Equipment != EPSEquipment::Hoe || Item->ItemType != EPSItemType::Hoe) return EPSTileInteractionResult::NoEffect;
 	return GridWorld->CanTillCell(Cell) ? EPSTileInteractionResult::Tilled : EPSTileInteractionResult::NoEffect;
 }
 
-bool APSPlayerController::CanChargeEquippedHoe() const
+int32 APSPlayerController::GetEquippedFarmChargeDepth() const
 {
 	const FPSItemStack* Item = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
-	return Equipment == EPSEquipment::Hoe && Item && PSItems::CanChargeHoe(*Item);
-}
-
-int32 APSPlayerController::GetEquippedHoeChargeDepth() const
-{
-	const FPSItemStack* Item = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
-	return CanChargeEquippedHoe() ? PSItems::GetDefinition(*Item).ChargedHoeDepth : 0;
+	return UsesFarmTool() && Item && !Item->IsEmpty() ? PSItems::GetDefinition(*Item).FarmChargeDepth : 0;
 }
 
 TArray<FIntPoint> APSPlayerController::GetFarmTargetCells(const bool bCharged) const
@@ -80,7 +72,8 @@ TArray<FIntPoint> APSPlayerController::GetFarmTargetCells(const bool bCharged) c
 		const auto* Farmer = Cast<APSPlayerCharacter>(GetPawn());
 		const FIntPoint Facing = Farmer->GetFacingCellOffset();
 		const FIntPoint Side(-Facing.Y, Facing.X);
-		for (int32 Row = 0; Row < GetEquippedHoeChargeDepth(); ++Row)
+		const int32 Depth = GetEquippedFarmChargeDepth();
+		for (int32 Row = 0; Row < Depth; ++Row)
 		{
 			const FIntPoint Center = Front.GetValue() + Facing * Row;
 			if (Row > 0) Cells.Add(Center);
@@ -91,12 +84,33 @@ TArray<FIntPoint> APSPlayerController::GetFarmTargetCells(const bool bCharged) c
 	return Cells;
 }
 
-EPSTileInteractionResult APSPlayerController::EvaluateFarmActionCell(const FIntPoint Cell, const bool bCharged) const
+EPSTileInteractionResult APSPlayerController::ApplyFarmTool(const TConstArrayView<FIntPoint> Cells)
 {
-	// Charging expands tilling only. Temporary hoe harvesting stays single-cell.
-	if (bCharged && IsValid(GridWorld) && GridWorld->GetCropType(Cell) != EPSCropType::None)
+	const auto* Farmer = Cast<APSPlayerCharacter>(GetPawn());
+	if (!Farmer || Farmer->StatsComponent->Health <= 0) return EPSTileInteractionResult::NoEffect;
+	if (Farmer->StatsComponent->Stamina < FarmToolStaminaCost)
+	{
+		ShowInsufficientFarmStamina();
 		return EPSTileInteractionResult::NoEffect;
-	return EvaluateFarmTarget(Cell);
+	}
+
+	EPSTileInteractionResult Result = EPSTileInteractionResult::NoEffect;
+	for (const FIntPoint Cell : Cells)
+	{
+		const auto TargetResult = EvaluateFarmTarget(Cell);
+		if (!IsFarmSuccess(TargetResult)) continue;
+		const auto Applied = TargetResult == EPSTileInteractionResult::Tilled ? GridWorld->TillCell(Cell) : GridWorld->WaterCell(Cell);
+		if (IsFarmSuccess(Applied)) Result = Applied;
+	}
+	if (IsFarmSuccess(Result))
+	{
+		const int32 UsedSlot = SelectedHotbarSlot;
+		Farmer->StatsComponent->TryConsumeStamina(FarmToolStaminaCost);
+		bool bDestroyed = false;
+		InventoryComponent->ConsumeHotbarDurability(UsedSlot, 1, bDestroyed);
+		if (Result == EPSTileInteractionResult::Tilled) UnlockFarmingFromTilling();
+	}
+	return Result;
 }
 
 void APSPlayerController::CaptureFarmContext()
@@ -121,9 +135,14 @@ bool APSPlayerController::IsFarmContextValid() const
 bool APSPlayerController::BeginFarmCharge()
 {
 	auto* Farmer = Cast<APSPlayerCharacter>(GetPawn());
-	if (bFarmActionActive || bFarmCharging || bInventoryOpen || IsPaused() || IsFishing() || !CanChargeEquippedHoe()
+	if (bFarmActionActive || bFarmCharging || bInventoryOpen || IsPaused() || IsFishing() || GetEquippedFarmChargeDepth() <= 0
 		|| !IsValid(Farmer) || Farmer->IsMovementLocked() || Farmer->IsRolling()
 		|| Farmer->StatsComponent->Health <= 0 || UWidgetBlueprintLibrary::IsDragDropping()) return false;
+	if (Farmer->StatsComponent->Stamina < FarmToolStaminaCost)
+	{
+		ShowInsufficientFarmStamina();
+		return false;
+	}
 	CaptureFarmContext();
 	bFarmCharging = true;
 	FarmChargeElapsed = 0;
@@ -132,21 +151,25 @@ bool APSPlayerController::BeginFarmCharge()
 
 void APSPlayerController::HandleSpecialAttackReleased()
 {
+	BushInteraction->Release(true);
 	if (!bFarmCharging) return;
 	UpdateFarmAction(0); // Validate even if the item/pawn changed since the last tick.
 	if (!bFarmCharging) return;
-	const bool bCharged = FarmChargeElapsed >= 0.5f;
+	const bool bCharged = FarmChargeElapsed >= FarmChargeDuration;
 	CancelFarmAction();
 	if (!IsPaused()) BeginFarmAction(bCharged);
 }
 
 void APSPlayerController::HandleSpecialAttackCanceled()
 {
+	BushInteraction->Release(true);
 	if (bFarmCharging) CancelFarmAction();
 }
 
 void APSPlayerController::FlushPressedKeys()
 {
+	CancelCropHarvest();
+	BushInteraction->Cancel();
 	GatheringAction->Cancel();
 	// Losing focus or switching input modes can synthesize a Completed event.
 	// Clear the pending charge before that event can be interpreted as a release.
@@ -160,19 +183,23 @@ bool APSPlayerController::BeginFarmAction(const bool bCharged)
 	if (bFarmActionActive || bFarmCharging || bInventoryOpen || IsPaused() || IsFishing() || !UsesFarmTool()
 		|| !IsValid(FarmCharacter) || FarmCharacter->IsMovementLocked() || FarmCharacter->IsRolling()
 		|| FarmCharacter->StatsComponent->Health <= 0 || UWidgetBlueprintLibrary::IsDragDropping()
-		|| (bCharged && !CanChargeEquippedHoe())) return false;
+		|| (bCharged && GetEquippedFarmChargeDepth() <= 0)) return false;
+	if (FarmCharacter->StatsComponent->Stamina < FarmToolStaminaCost)
+	{
+		ShowInsufficientFarmStamina();
+		return false;
+	}
 	const TArray<FIntPoint> Cells = GetFarmTargetCells(bCharged);
 	if (Cells.IsEmpty()) return false;
-	if (!Cells.ContainsByPredicate([&](const FIntPoint Cell) { return IsFarmSuccess(EvaluateFarmActionCell(Cell, bCharged)); }))
+	if (!Cells.ContainsByPredicate([&](const FIntPoint Cell) { return IsFarmSuccess(EvaluateFarmTarget(Cell)); }))
 	{
-		ShowFarmResult(EvaluateFarmActionCell(Cells[0], bCharged));
+		ShowFarmResult(EvaluateFarmTarget(Cells[0]));
 		return false;
 	}
 	FarmActionCells = Cells;
 	FarmActionCell = Cells[0];
-	bFarmActionCharged = bCharged;
 	CaptureFarmContext();
-	FarmActionTimeRemaining = FMath::IsFinite(FarmActionDuration) ? FMath::Max(0.01f, FarmActionDuration) : 0.5f;
+	FarmActionTimeRemaining = FMath::IsFinite(FarmActionDuration) ? FMath::Max(0.01f, FarmActionDuration) : DefaultFarmActionDuration;
 	bFarmActionActive = true;
 	FarmCharacter->SetMovementLocked(true);
 	FarmCharacter->StatsComponent->SetActionActive(true);
@@ -190,7 +217,6 @@ void APSPlayerController::CancelFarmAction()
 	}
 	bFarmActionActive = false;
 	bFarmCharging = false;
-	bFarmActionCharged = false;
 	FarmChargeElapsed = 0;
 	FarmActionCells.Reset();
 	FarmActionTimeRemaining = 0;
@@ -212,52 +238,43 @@ void APSPlayerController::UpdateFarmAction(const float DeltaSeconds)
 	if (IsPaused() || !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0) return;
 	if (bFarmCharging)
 	{
-		FarmChargeElapsed = FMath::Min(0.5f, FarmChargeElapsed + DeltaSeconds);
+		FarmChargeElapsed = FMath::Min(FarmChargeDuration, FarmChargeElapsed + DeltaSeconds);
 		return;
 	}
 	FarmActionTimeRemaining = FMath::Max(0.0f, FarmActionTimeRemaining - DeltaSeconds);
 	if (FarmActionTimeRemaining > UE_KINDA_SMALL_NUMBER) return;
 	const EPSEquipment Tool = FarmActionEquipment;
 	const FIntPoint Cell = FarmActionCell;
+	const bool bHadStamina = FarmCharacter->StatsComponent->Stamina >= FarmToolStaminaCost;
 	EPSTileInteractionResult Result = EPSTileInteractionResult::NoEffect;
 	{
 		TGuardValue<bool> Completing(bCompletingFarmAction, true);
-		if (bFarmActionCharged)
-		{
-			// One completed swing costs one durability, even when it tills multiple cells.
-			// Apply all cells before consuming the last durability and unequipping.
-			for (const FIntPoint Target : FarmActionCells)
-				if (EvaluateFarmActionCell(Target, true) == EPSTileInteractionResult::Tilled
-					&& GridWorld->TillCell(Target) == EPSTileInteractionResult::Tilled) Result = EPSTileInteractionResult::Tilled;
-			if (IsFarmSuccess(Result))
-			{
-				bool bDestroyed = false;
-				InventoryComponent->ConsumeHotbarDurability(FarmActionSlot, 1, bDestroyed);
-			}
-		}
-		else
-		{
-			Result = EvaluateFarmTarget(Cell);
-			if (IsFarmSuccess(Result)) Result = UseEquippedItemOnCell(Cell);
-		}
+		Result = ApplyFarmTool(FarmActionCells);
 	}
 	CancelFarmAction();
-	ShowFarmResult(Result);
+	if (bHadStamina) ShowFarmResult(Result);
 	OnFarmToolFinished(Tool, Cell, IsFarmSuccess(Result));
 }
 
 void APSPlayerController::UpdateFarmTargetMarker()
 {
 	const APSPlayerCharacter* FarmCharacter = Cast<APSPlayerCharacter>(GetPawn());
-	if (!IsLocalController() || !UsesFarmTool() || bInventoryOpen || IsFishing()
+	const bool bTreeSeed = Equipment == EPSEquipment::TreeSeed;
+	if (!IsLocalController() || (!UsesFarmTool() && !bTreeSeed) || bInventoryOpen || IsFishing()
 		|| !IsValid(FarmCharacter) || FarmCharacter->StatsComponent->Health <= 0 || !IsValid(GridWorld))
 	{
 		if (IsValid(FarmTargetMarker)) FarmTargetMarker->SetActorHiddenInGame(true);
 		for (APSFarmTargetMarker* Marker : FarmSideMarkers) if (IsValid(Marker)) Marker->SetActorHiddenInGame(true);
 		return;
 	}
-	const bool bCharged = bFarmActionActive ? bFarmActionCharged : bFarmCharging && FarmChargeElapsed >= 0.5f;
-	const TArray<FIntPoint> Cells = bFarmActionActive ? FarmActionCells : GetFarmTargetCells(bCharged);
+	const bool bCharged = bFarmCharging && FarmChargeElapsed >= FarmChargeDuration;
+	TArray<FIntPoint> Cells;
+	if (bTreeSeed)
+	{
+		const auto Target = GetCursorCell();
+		if (Target.IsSet() && !bJournalOpen && !IsPaused()) Cells.Add(Target.GetValue());
+	}
+	else Cells = bFarmActionActive ? FarmActionCells : GetFarmTargetCells(bCharged);
 	// Keep the pool when switching from nine cells to one or three; hide unused actors.
 	FarmSideMarkers.SetNum(FMath::Max(FarmSideMarkers.Num(), Cells.Num() - 1));
 	for (int32 Index = 0; Index <= FarmSideMarkers.Num(); ++Index)
@@ -275,13 +292,18 @@ void APSPlayerController::UpdateFarmTargetMarker()
 			SpawnParameters.ObjectFlags = RF_Transient;
 			Marker = GetWorld()->SpawnActor<APSFarmTargetMarker>(APSFarmTargetMarker::StaticClass(), SpawnParameters);
 		}
-		if (Marker) Marker->ShowTarget(GridWorld->CellToWorldCenter(Cells[Index]), GridWorld->GetCellSize(),
-			IsFarmSuccess(EvaluateFarmActionCell(Cells[Index], bCharged)));
+		if (!Marker) continue;
+		const FIntPoint Cell = Cells[Index];
+		const bool bUsable = bTreeSeed
+			? GridWorld->Gathering->CanPlantSeed(GetTreeSeedPlanter(), Cell, InventoryComponent->GetHotbarSlot(SelectedHotbarSlot))
+			: FarmCharacter->StatsComponent->Stamina >= FarmToolStaminaCost && IsFarmSuccess(EvaluateFarmTarget(Cell));
+		Marker->ShowTarget(GridWorld->CellToWorldCenter(Cell), GridWorld->GetCellSize(), bUsable);
 	}
 }
 
 void APSPlayerController::OnUnPossess()
 {
+	CancelCropHarvest();
 	CancelFarmAction();
 	if (IsValid(FarmTargetMarker)) FarmTargetMarker->SetActorHiddenInGame(true);
 	for (APSFarmTargetMarker* Marker : FarmSideMarkers) if (IsValid(Marker)) Marker->SetActorHiddenInGame(true);

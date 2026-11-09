@@ -35,9 +35,13 @@ void APSPlayerController::BeginFishingRetrieve()
 
 void APSPlayerController::UpdateFishingVisual(const float DeltaSeconds)
 {
-	// Advance flight even on controllers without a local visual. Retrieval freezes
-	// this point so cancelling mid-flight starts from the actual bobber position.
-	if (FishingState == EPSFishingState::WaitingForBite) FishingVisualElapsed += FMath::Max(0.f, DeltaSeconds);
+	// Advance through flight and floating. Retrieval freezes the phase so it
+	// starts from the current point on the flight path or the water.
+	if (FishingState == EPSFishingState::WaitingForBite || FishingState == EPSFishingState::BiteWindow
+		|| FishingState == EPSFishingState::Minigame)
+	{
+		FishingVisualElapsed += FMath::Max(0.f, DeltaSeconds);
+	}
 	if (!IsValid(FishingBobber)) return;
 	if (FishingState == EPSFishingState::Success && GetPawn())
 	{
@@ -53,9 +57,10 @@ void APSPlayerController::UpdateFishingVisual(const float DeltaSeconds)
 	}
 	const float RetrieveAlpha = FishingState == EPSFishingState::Retrieving
 		? 1 - FMath::Clamp((FishingStateTimeRemaining - DeltaSeconds) / FMath::Max(.01f, FishingStateDuration), 0.f, 1.f) : 0;
+	const float WaterElapsed = FMath::Max(0.f, FishingVisualElapsed - FishingFlightDuration);
 	FishingBobber->UpdateVisual(GetPawn()->GetActorLocation() + FVector(0, 0, 25),
-		GridWorld->CellToWorldCenter(FishingCell.GetValue()) + FVector(0, 0, 8),
-		FishingState == EPSFishingState::BiteWindow, GetWorld()->GetTimeSeconds(), RetrieveAlpha,
+		GridWorld->WaterVisualLocation(FishingCell.GetValue()) + FVector(0, 0, 8),
+		FishingState == EPSFishingState::BiteWindow, WaterElapsed, RetrieveAlpha,
 		FishingVisualElapsed / FMath::Max(.01f, FishingFlightDuration),
 		PlayerCameraManager ? PlayerCameraManager->GetCameraRotation().RotateVector(FVector::UpVector) : FVector::UpVector);
 }

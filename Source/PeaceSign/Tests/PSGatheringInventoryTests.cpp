@@ -105,7 +105,7 @@ bool FPSGatheringInventoryTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("All twelve gathering items have separate art"), UniqueIcons.Num(), 12);
 	Inventory->ResetToDefaults();
-	TestTrue(TEXT("Bag can be filled"), Inventory->AddItem(EPSItemType::Stone, 9990));
+	TestTrue(TEXT("Bag can be filled"), Inventory->AddItem(EPSItemType::Stone, 8 * 999));
 	FPSGatheringDrop Drop; Drop.Id = FGuid::NewGuid(); Drop.Item.ItemType = EPSItemType::Wood;
 	Drop.Item.ItemId = TEXT("030101"); Drop.Item.Quantity = 4;
 	Gathering->Restore({}, {Drop}, true, true);
@@ -114,7 +114,7 @@ bool FPSGatheringInventoryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Make room"), Inventory->RemoveItem(EPSItemType::Stone, 999));
 	TestTrue(TEXT("Reward collected after making room"), Gathering->CollectDrop(Drop.Id, Inventory));
 	// RemoveItem frees stacks from the end of the bag.
-	const FPSItemStack CollectedLogs = Inventory->GetBagSlot(9);
+	const FPSItemStack CollectedLogs = Inventory->GetBagSlot(7);
 	TestEqual(TEXT("Collected logs keep the item ID"), CollectedLogs.ItemId, FName(TEXT("030101")));
 	TestEqual(TEXT("All four logs enter inventory"), CollectedLogs.Quantity, 4);
 	FPSItemStack Legacy = CollectedLogs; Legacy.ItemId = TEXT("Log.Oak");

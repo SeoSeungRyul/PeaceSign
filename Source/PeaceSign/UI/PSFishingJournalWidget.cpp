@@ -2,6 +2,8 @@
 #include "PSInventoryWidget.h"
 #include "../PSPlayerController.h"
 #include "../Fishing/PSFishingJournalComponent.h"
+#include "../Inventory/PSInventoryComponent.h"
+#include "../Data/PSGameDataTables.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Border.h"
 #include "Components/ButtonSlot.h"
@@ -470,11 +472,15 @@ void UPSFishingJournalWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 	if (const auto* Controller = Cast<APSPlayerController>(GetOwningPlayer()))
+		if (auto* Inventory = Controller->GetInventoryComponent()) Inventory->OnInventoryChanged.AddUniqueDynamic(this, &ThisClass::RefreshJournal);
+	if (const auto* Controller = Cast<APSPlayerController>(GetOwningPlayer()))
 		if (auto* Journal = Controller->GetFishingJournalComponent()) Journal->OnJournalChanged.AddUniqueDynamic(this, &ThisClass::OnJournalChanged);
 	RefreshJournal();
 }
 void UPSFishingJournalWidget::NativeDestruct()
 {
+	if (const auto* Controller = Cast<APSPlayerController>(GetOwningPlayer()))
+		if (auto* Inventory = Controller->GetInventoryComponent()) Inventory->OnInventoryChanged.RemoveDynamic(this, &ThisClass::RefreshJournal);
 	if (const auto* Controller = Cast<APSPlayerController>(GetOwningPlayer()))
 		if (auto* Journal = Controller->GetFishingJournalComponent()) Journal->OnJournalChanged.RemoveDynamic(this, &ThisClass::OnJournalChanged);
 	Super::NativeDestruct();
@@ -490,10 +496,18 @@ void UPSFishingJournalWidget::SelectCategory(int32 Index)
 	Category = Index; Page = 0; SelectedFish = NAME_None; RefreshJournal();
 }
 void UPSFishingJournalWidget::PreviousPage() { if (Page > 0) { --Page; SelectedFish = NAME_None; RefreshJournal(); } }
-void UPSFishingJournalWidget::NextPage()
+TArray<FName> UPSFishingJournalWidget::GetCategoryIds() const
 {
 	const auto* Controller = Cast<APSPlayerController>(GetOwningPlayer());
-	if (Category == 0 && Controller && (Page + 1) * EntriesPerPage < Controller->GetFishIds().Num()) { ++Page; SelectedFish = NAME_None; RefreshJournal(); }
+	if (!Controller) return {};
+	if (Category == 0) return Controller->GetFishIds();
+	if (Category == 1 && Controller->GetInventoryComponent()) return Controller->GetInventoryComponent()->GetDiscoveredGatheringItems();
+	return {};
+}
+
+void UPSFishingJournalWidget::NextPage()
+{
+	if ((Page + 1) * EntriesPerPage < GetCategoryIds().Num()) { ++Page; SelectedFish = NAME_None; RefreshJournal(); }
 }
 void UPSFishingJournalWidget::UpdateCategoryTabs()
 {
@@ -508,7 +522,10 @@ void UPSFishingJournalWidget::RefreshJournal()
 	if (!Controller || !FishList) return;
 	UpdateCategoryTabs();
 	const auto* Journal = Controller->GetFishingJournalComponent();
-	const TArray<FName> Ids = Category == 0 ? Controller->GetFishIds() : TArray<FName>();
+	const TArray<FName> Ids = GetCategoryIds();
+	const TCHAR* Labels[] = {TEXT("설명"), Category == 1 ? TEXT("최대 중첩") : TEXT("사이즈"),
+		Category == 1 ? TEXT("등록 상태") : TEXT("최대 기록"), TEXT("계절"), TEXT("위치")};
+	for (int32 Index = 0; Index < 5; ++Index) SetText(WidgetTree, *FString::Printf(TEXT("DetailLabel%d"), Index), Labels[Index]);
 	const int32 PageCount = FMath::Max(1, FMath::DivideAndRoundUp(Ids.Num(), EntriesPerPage)); Page = FMath::Clamp(Page, 0, PageCount - 1);
 	SetText(WidgetTree, TEXT("PageNumber"), FString::Printf(TEXT("%d / %d"), Page + 1, PageCount));
 	if (UWidget* Empty = WidgetTree->FindWidget(TEXT("EmptyCategory"))) Empty->SetVisibility(Ids.IsEmpty() ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
@@ -526,7 +543,9 @@ void UPSFishingJournalWidget::RefreshJournal()
 			continue;
 		}
 		FName Id = Ids[Index]; const FPSFishDefinition* Definition = Controller->FindFishDefinition(Id);
-		const bool Known = Journal && Journal->HasDiscovered(Id);
+		FPSItemStack Item; Item.ItemId = Id; Item.ItemType = UPSGameDataLibrary::GatheringItemType(Id); Item.Quantity = 1;
+		const bool Known = Category == 1 || (Journal && Journal->HasDiscovered(Id));
+		const FText DisplayName = Category == 1 ? Controller->GetItemDisplayName(Item) : Known ? Definition->Name : FText::FromString(TEXT("???"));
 		auto* Entry = WidgetTree->ConstructWidget<UPSFishingJournalEntry>(); Entry->Setup(this, Id);
 		FButtonStyle Style; Style.Normal = *FCoreStyle::Get().GetBrush("WhiteBrush");
 		Style.Normal.TintColor = FSlateColor(FLinearColor(.55f, .32f, .1f, Id == SelectedFish ? .22f : 0));
@@ -538,8 +557,8 @@ void UPSFishingJournalWidget::RefreshJournal()
 		auto* ContentSlot = CastChecked<UButtonSlot>(CellFit->Slot);
 		ContentSlot->SetHorizontalAlignment(HAlign_Fill); ContentSlot->SetVerticalAlignment(VAlign_Fill); ContentSlot->SetPadding(FMargin(0));
 		Picture(WidgetTree, Cell, NAME_None, TEXT("/Game/UI/Encyclopedia/Types_Page/Types_NameTag"), FVector2D(6, 6), FVector2D(89, 30));
-		Text(WidgetTree, Cell, NAME_None, FString::Printf(TEXT("%02d %s"), Index + 1, Known ? *Definition->Name.ToString() : TEXT("???")), 13, FVector2D(9, 8), FVector2D(83, 24), true);
-		if (UTexture2D* Icon = Known ? Controller->GetFishIcon(Id) : nullptr)
+		Text(WidgetTree, Cell, NAME_None, FString::Printf(TEXT("%02d %s"), Index + 1, *DisplayName.ToString()), 13, FVector2D(9, 8), FVector2D(83, 24), true);
+		if (UTexture2D* Icon = Category == 1 ? Controller->GetItemIcon(Item) : Known ? Controller->GetFishIcon(Id) : nullptr)
 		{
 			auto* Fit = WidgetTree->ConstructWidget<UScaleBox>(); Fit->SetStretch(EStretch::ScaleToFit);
 			Place(Cell, Fit, FVector2D(9, 43), FVector2D(83, 70));
@@ -561,7 +580,27 @@ void UPSFishingJournalWidget::ClearDetails()
 void UPSFishingJournalWidget::SelectFish(FName Id)
 {
 	const auto* Controller = Cast<APSPlayerController>(GetOwningPlayer());
-	if (!Controller || Category != 0) return;
+	if (!Controller) return;
+	if (Category == 1)
+	{
+		SelectedFish = Id;
+		ClearDetails();
+		FPSItemStack Item; Item.ItemId = Id; Item.ItemType = UPSGameDataLibrary::GatheringItemType(Id); Item.Quantity = 1;
+		if (FishName) FishName->SetText(Controller->GetItemDisplayName(Item));
+		SetText(WidgetTree, TEXT("FishDetails"), Controller->GetItemDescription(Item).ToString());
+		SetText(WidgetTree, TEXT("FishSize"), FString::FromInt(PSItems::GetDefinition(Item).MaxStack));
+		SetText(WidgetTree, TEXT("FishRecord"), TEXT("발견 완료"));
+		const bool bBerry = Id == TEXT("Forage.WildStrawberry") || Id == TEXT("Forage.Blackberry");
+		SetText(WidgetTree, TEXT("FishSeason"), bBerry ? (Id == TEXT("Forage.WildStrawberry") ? TEXT("봄 · 여름") : TEXT("가을 · 겨울")) : TEXT(""));
+		SetText(WidgetTree, TEXT("FishLocation"), bBerry ? TEXT("풀 타일 덤불") : TEXT("나무"));
+		if (UTexture2D* Icon = Controller->GetItemIcon(Item); Icon && FishImage)
+		{
+			FishImage->SetBrushFromTexture(Icon, true);
+			FishImage->SetVisibility(ESlateVisibility::HitTestInvisible);
+		}
+		return;
+	}
+	if (Category != 0) return;
 	const bool Changed = SelectedFish != Id; SelectedFish = Id;
 	const auto* Journal = Controller->GetFishingJournalComponent();
 	const FPSFishDefinition* Fish = Controller->FindFishDefinition(Id);

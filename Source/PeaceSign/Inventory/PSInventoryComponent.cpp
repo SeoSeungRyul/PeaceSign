@@ -6,7 +6,7 @@
 
 namespace
 {
-	constexpr int32 CurrentInventorySaveVersion = 9;
+	constexpr int32 CurrentInventorySaveVersion = 11;
 
 	bool UsesCropId(const EPSItemType ItemType)
 	{
@@ -30,7 +30,7 @@ namespace
 			&& Slot.CropId == CropId && Slot.CurrentDurability == CurrentDurability;
 	}
 
-	void SanitizeSlots(TArray<FPSItemStack>& Slots, const bool bLegacyDurability)
+	void SanitizeSlots(TArray<FPSItemStack>& Slots, const int32 SaveVersion)
 	{
 		for (FPSItemStack& Slot : Slots)
 		{
@@ -45,7 +45,10 @@ namespace
 				if (Definition.bInfiniteDurability) Slot.CurrentDurability = INDEX_NONE;
 				else if (Definition.MaxDurability > 0)
 				{
-					if (bLegacyDurability && Slot.CurrentDurability <= 0) Slot.CurrentDurability = Definition.MaxDurability;
+					const bool bLegacyWateringCan = SaveVersion < 11 && Slot.ItemType == EPSItemType::WateringCan
+						&& Slot.CurrentDurability == INDEX_NONE;
+					if (Slot.CurrentDurability <= 0 && (SaveVersion < 4 || bLegacyWateringCan))
+						Slot.CurrentDurability = Definition.MaxDurability;
 					Slot.CurrentDurability = FMath::Clamp(Slot.CurrentDurability, 0, Definition.MaxDurability);
 					if (Slot.CurrentDurability <= 0) Slot.Clear();
 				}
@@ -265,6 +268,25 @@ bool UPSInventoryComponent::RestoreDurability(const EPSInventoryArea Area, const
 	return true;
 }
 
+void UPSInventoryComponent::RestoreAllDurability()
+{
+	bool bChanged = false;
+	const auto RestoreSlots = [&bChanged](TArrayView<FPSItemStack> Slots)
+	{
+		for (FPSItemStack& Stack : Slots)
+		{
+			if (!PSItems::UsesDurability(Stack)) continue;
+			const int32 Maximum = PSItems::GetDefinition(Stack).MaxDurability;
+			if (Stack.CurrentDurability == Maximum) continue;
+			Stack.CurrentDurability = Maximum;
+			bChanged = true;
+		}
+	};
+	RestoreSlots(HotbarSlots);
+	RestoreSlots(MakeArrayView(BagSlots).Left(UnlockedBagSlotCount));
+	if (bChanged) NotifyChanged();
+}
+
 float UPSInventoryComponent::GetDurabilityRatio(const EPSInventoryArea Area, const int32 SlotIndex) const
 {
 	if (!IsAreaSlotUnlocked(Area, SlotIndex)) return 0.0f;
@@ -398,6 +420,7 @@ void UPSInventoryComponent::InitializeDefaults()
 {
 	bPendingUpgradedHoeGrant = false;
 	bPendingSecondHoeGrant = false;
+	bPendingLettuceGrant = false;
 	HotbarSlots.SetNum(HotbarSlotCount);
 	BagSlots.SetNum(MaxBagSlotCount);
 	for (FPSItemStack& Slot : HotbarSlots) Slot.Clear();
@@ -407,7 +430,8 @@ void UPSInventoryComponent::InitializeDefaults()
 	HotbarSlots[0].Quantity = 1;
 	HotbarSlots[0].CurrentDurability = PSItems::GetDefinition(EPSItemType::Hoe).MaxDurability;
 	HotbarSlots[1].ItemType = EPSItemType::TestSeed;
-	HotbarSlots[1].CropId = 0;
+	HotbarSlots[1].CropId = PSItemIds::LettuceCropId;
+	HotbarSlots[1].ItemId = PSItemIds::LettuceSeed;
 	HotbarSlots[1].Quantity = 24;
 	HotbarSlots[2].ItemType = EPSItemType::FishingRod;
 	HotbarSlots[2].ItemId = PSItemIds::WoodenFishingRod;
@@ -422,6 +446,7 @@ void UPSInventoryComponent::InitializeDefaults()
 	HotbarSlots[4].CurrentDurability = PSItems::GetDefinition(HotbarSlots[4]).MaxDurability;
 	HotbarSlots[5].ItemType = EPSItemType::WateringCan;
 	HotbarSlots[5].Quantity = 1;
+	HotbarSlots[5].CurrentDurability = PSItems::GetDefinition(HotbarSlots[5]).MaxDurability;
 	HotbarSlots[6].ItemType = EPSItemType::Hoe;
 	HotbarSlots[6].ItemId = PSItemIds::UpgradedHoe;
 	HotbarSlots[6].Quantity = 1;
@@ -431,14 +456,31 @@ void UPSInventoryComponent::InitializeDefaults()
 	HotbarSlots[7].Quantity = 1;
 	HotbarSlots[7].CurrentDurability = PSItems::GetDefinition(HotbarSlots[7]).MaxDurability;
 	bPendingAxeGrant = true;
-	TryGrantPendingHoeVariant(PSGathering::AxeId(1), 8, bPendingAxeGrant, EPSItemType::Axe);
+	bPendingUpgradedWateringCanGrant = true;
+	bPendingSecondWateringCanGrant = true;
+	TryGrantPendingItems();
 }
 
 void UPSInventoryComponent::NotifyChanged()
 {
-	TryGrantPendingUpgradedHoe();
+	TryGrantPendingItems();
+	const auto Discover = [this](const FPSItemStack& Item)
+	{
+		if (!Item.IsEmpty() && (Item.ItemType == EPSItemType::GatheredFruit || Item.ItemType == EPSItemType::Wood
+			|| Item.ItemType == EPSItemType::TreeSeed))
+			DiscoveredGatheringItems.Add(UPSGameDataLibrary::CanonicalItemID(Item.ItemId));
+	};
+	for (const auto& Item : HotbarSlots) Discover(Item);
+	for (int32 Index = 0; Index < UnlockedBagSlotCount; ++Index) Discover(BagSlots[Index]);
 	if (bAutoSave) SaveInventory();
 	OnInventoryChanged.Broadcast();
+}
+
+TArray<FName> UPSInventoryComponent::GetDiscoveredGatheringItems() const
+{
+	TArray<FName> Result = DiscoveredGatheringItems.Array();
+	Result.Sort(FNameLexicalLess());
+	return Result;
 }
 
 bool UPSInventoryComponent::SaveInventory() const
@@ -452,9 +494,13 @@ bool UPSInventoryComponent::SaveInventory() const
 	Save->HotbarSlots = HotbarSlots;
 	Save->BagSlots = BagSlots;
 	Save->UnlockedBagSlotCount = UnlockedBagSlotCount;
+	Save->DiscoveredGatheringItems = DiscoveredGatheringItems;
 	Save->bPendingUpgradedHoeGrant = bPendingUpgradedHoeGrant;
 	Save->bPendingSecondHoeGrant = bPendingSecondHoeGrant;
 	Save->bPendingAxeGrant = bPendingAxeGrant;
+	Save->bPendingLettuceGrant = bPendingLettuceGrant;
+	Save->bPendingUpgradedWateringCanGrant = bPendingUpgradedWateringCanGrant;
+	Save->bPendingSecondWateringCanGrant = bPendingSecondWateringCanGrant;
 	return UGameplayStatics::SaveGameToSlot(Save, SaveSlotName, 0);
 }
 
@@ -463,6 +509,7 @@ bool UPSInventoryComponent::LoadInventory()
 	if (SaveSlotName.IsEmpty() || !UGameplayStatics::DoesSaveGameExist(SaveSlotName, 0)) return false;
 	const UPSInventorySaveGame* Save = Cast<UPSInventorySaveGame>(UGameplayStatics::LoadGameFromSlot(SaveSlotName, 0));
 	if (!Save) return false;
+	DiscoveredGatheringItems = Save->DiscoveredGatheringItems;
 	bool bMigrated = false;
 	if (Save->DataVersion >= 2 && Save->HotbarSlots.Num() == HotbarSlotCount
 		&& Save->BagSlots.Num() == MaxBagSlotCount)
@@ -488,8 +535,8 @@ bool UPSInventoryComponent::LoadInventory()
 		return false;
 	}
 	const bool bLegacyDurability = Save->DataVersion < 4;
-	SanitizeSlots(HotbarSlots, bLegacyDurability);
-	SanitizeSlots(BagSlots, bLegacyDurability);
+	SanitizeSlots(HotbarSlots, Save->DataVersion);
+	SanitizeSlots(BagSlots, Save->DataVersion);
 	if (Save->DataVersion < 1 && CountItem(EPSItemType::FishingRod) == 0 && HotbarSlots[2].IsEmpty())
 	{
 		HotbarSlots[2].ItemType = EPSItemType::FishingRod;
@@ -573,6 +620,7 @@ bool UPSInventoryComponent::LoadInventory()
 			if (!Target.IsEmpty()) continue;
 			Target.ItemType = EPSItemType::WateringCan;
 			Target.Quantity = 1;
+			Target.CurrentDurability = PSItems::GetDefinition(Target).MaxDurability;
 			bAdded = true;
 			break;
 		}
@@ -582,6 +630,7 @@ bool UPSInventoryComponent::LoadInventory()
 				if (!BagSlots[Index].IsEmpty()) continue;
 				BagSlots[Index].ItemType = EPSItemType::WateringCan;
 				BagSlots[Index].Quantity = 1;
+				BagSlots[Index].CurrentDurability = PSItems::GetDefinition(BagSlots[Index]).MaxDurability;
 				bAdded = true;
 				break;
 			}
@@ -591,43 +640,80 @@ bool UPSInventoryComponent::LoadInventory()
 	bPendingUpgradedHoeGrant = Save->DataVersion < 7 || Save->bPendingUpgradedHoeGrant;
 	bPendingSecondHoeGrant = Save->DataVersion < 8 || Save->bPendingSecondHoeGrant;
 	bPendingAxeGrant = Save->DataVersion < 9 || Save->bPendingAxeGrant;
-	const bool bGranted = TryGrantPendingUpgradedHoe();
+	bPendingLettuceGrant = Save->DataVersion < 10 || Save->bPendingLettuceGrant;
+	bPendingUpgradedWateringCanGrant = Save->DataVersion < 11 || Save->bPendingUpgradedWateringCanGrant;
+	bPendingSecondWateringCanGrant = Save->DataVersion < 11 || Save->bPendingSecondWateringCanGrant;
+	if (Save->DataVersion < 10)
+	{
+		// Upgrade the original generic starter seeds without altering their count or slot.
+		const auto UpgradeSeeds = [](TArray<FPSItemStack>& Slots)
+		{
+			for (auto& Item : Slots)
+				if (!Item.IsEmpty() && Item.ItemType == EPSItemType::TestSeed && Item.CropId == 0 && Item.ItemId.IsNone())
+				{
+					Item.ItemId = PSItemIds::LettuceSeed;
+					Item.CropId = PSItemIds::LettuceCropId;
+				}
+		};
+		UpgradeSeeds(HotbarSlots);
+		UpgradeSeeds(BagSlots);
+	}
+	const bool bGranted = TryGrantPendingItems();
 	bMigrated |= bGranted || Save->DataVersion < CurrentInventorySaveVersion
-		|| bPendingUpgradedHoeGrant != Save->bPendingUpgradedHoeGrant || bPendingSecondHoeGrant != Save->bPendingSecondHoeGrant;
+		|| bPendingUpgradedHoeGrant != Save->bPendingUpgradedHoeGrant || bPendingSecondHoeGrant != Save->bPendingSecondHoeGrant
+		|| bPendingLettuceGrant != Save->bPendingLettuceGrant
+		|| bPendingUpgradedWateringCanGrant != Save->bPendingUpgradedWateringCanGrant
+		|| bPendingSecondWateringCanGrant != Save->bPendingSecondWateringCanGrant;
 	if (bMigrated && bAutoSave) SaveInventory();
 	OnInventoryChanged.Broadcast();
 	return true;
 }
 
-bool UPSInventoryComponent::TryGrantPendingUpgradedHoe()
+bool UPSInventoryComponent::TryGrantPendingItems()
 {
-	const bool bFirstGranted = TryGrantPendingHoeVariant(PSItemIds::UpgradedHoe, 6, bPendingUpgradedHoeGrant);
-	const bool bSecondGranted = TryGrantPendingHoeVariant(PSItemIds::SecondUpgradedHoe, 7, bPendingSecondHoeGrant);
-	const bool bAxeGranted = TryGrantPendingHoeVariant(PSGathering::AxeId(1), 8, bPendingAxeGrant, EPSItemType::Axe);
-	return bFirstGranted || bSecondGranted || bAxeGranted;
+	bool bGranted = TryGrantPendingItem(PSItemIds::UpgradedHoe, 6, bPendingUpgradedHoeGrant);
+	bGranted |= TryGrantPendingItem(PSItemIds::SecondUpgradedHoe, 7, bPendingSecondHoeGrant);
+	bGranted |= TryGrantPendingItem(PSGathering::AxeId(1), 8, bPendingAxeGrant, EPSItemType::Axe);
+	bGranted |= TryGrantPendingItem(PSItemIds::LettuceSeed, 1, bPendingLettuceGrant,
+		EPSItemType::TestSeed, 24, PSItemIds::LettuceCropId);
+	bGranted |= TryGrantPendingItem(PSItemIds::UpgradedWateringCan, INDEX_NONE, bPendingUpgradedWateringCanGrant, EPSItemType::WateringCan);
+	bGranted |= TryGrantPendingItem(PSItemIds::SecondUpgradedWateringCan, INDEX_NONE, bPendingSecondWateringCanGrant, EPSItemType::WateringCan);
+	return bGranted;
 }
 
-bool UPSInventoryComponent::TryGrantPendingHoeVariant(const FName ItemId, const int32 PreferredSlot, bool& bPending, const EPSItemType Type)
+bool UPSInventoryComponent::TryGrantPendingItem(const FName ItemId, const int32 PreferredHotbarSlot, bool& bPending,
+	const EPSItemType Type, const int32 Quantity, const int32 CropId)
 {
 	if (!bPending) return false;
-	const auto IsUpgradedHoe = [ItemId, Type](const FPSItemStack& Item)
+	const auto MatchesVariant = [ItemId, Type](const FPSItemStack& Item)
 	{
 		return !Item.IsEmpty() && Item.ItemType == Type && Item.ItemId == ItemId;
 	};
-	bool bOwned = HotbarSlots.ContainsByPredicate(IsUpgradedHoe);
-	for (int32 Index = 0; !bOwned && Index < UnlockedBagSlotCount; ++Index) bOwned = IsUpgradedHoe(BagSlots[Index]);
+	bool bOwned = HotbarSlots.ContainsByPredicate(MatchesVariant);
+	for (int32 Index = 0; !bOwned && Index < UnlockedBagSlotCount; ++Index) bOwned = MatchesVariant(BagSlots[Index]);
 	if (bOwned) { bPending = false; return false; }
 	FPSItemStack* Target = nullptr;
-	for (int32 Offset = 0; !Target && Offset < HotbarSlots.Num(); ++Offset)
-		if (HotbarSlots[(PreferredSlot + Offset) % HotbarSlotCount].IsEmpty()) Target = &HotbarSlots[(PreferredSlot + Offset) % HotbarSlotCount];
-	for (int32 Index = 0; !Target && Index < UnlockedBagSlotCount && BagSlots.IsValidIndex(Index); ++Index)
-		if (BagSlots[Index].IsEmpty()) Target = &BagSlots[Index];
+	if (PreferredHotbarSlot != INDEX_NONE)
+	{
+		for (int32 Offset = 0; !Target && Offset < HotbarSlots.Num(); ++Offset)
+		{
+			const int32 Slot = (PreferredHotbarSlot + Offset) % HotbarSlotCount;
+			if (HotbarSlots[Slot].IsEmpty()) Target = &HotbarSlots[Slot];
+		}
+	}
+	for (int32 Offset = 0; !Target && Offset < UnlockedBagSlotCount; ++Offset)
+	{
+		const int32 Slot = PreferredHotbarSlot == INDEX_NONE ? UnlockedBagSlotCount - 1 - Offset : Offset;
+		if (BagSlots.IsValidIndex(Slot) && BagSlots[Slot].IsEmpty()) Target = &BagSlots[Slot];
+	}
 	if (!Target) return false; // Preserve the pending grant across saves until space is available.
 	Target->Clear();
 	Target->ItemType = Type;
 	Target->ItemId = ItemId;
-	Target->Quantity = 1;
-	Target->CurrentDurability = PSItems::GetDefinition(*Target).MaxDurability;
+	Target->Quantity = Quantity;
+	Target->CropId = CropId;
+	const int32 Durability = PSItems::GetDefinition(*Target).MaxDurability;
+	Target->CurrentDurability = Durability > 0 ? Durability : INDEX_NONE;
 	bPending = false;
 	return true;
 }

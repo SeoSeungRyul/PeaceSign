@@ -75,7 +75,7 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	};
 	Controller->SelectHotbarSlot(6);
 	TestEqual(TEXT("Temporary upgraded hoe starts in slot seven"), Inventory->GetHotbarSlot(6).ItemId, PSItemIds::UpgradedHoe);
-	TestTrue(TEXT("Upgraded hoe is chargeable"), Controller->CanChargeEquippedHoe());
+	TestTrue(TEXT("Upgraded hoe is chargeable"), Controller->GetEquippedFarmChargeDepth() > 0);
 	TestTrue(TEXT("Upgraded hoe has a distinct display name"), PSItems::GetDefinition(Inventory->GetHotbarSlot(6)).Name.ToString().Contains(TEXT("1차")));
 	ClearTargets();
 	Step(true, 0);
@@ -87,7 +87,7 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	Step(false, 0);
 	TestTrue(TEXT("Enhanced Input Completed starts short swing"), Controller->IsFarmActionActive());
 	TestEqual(TEXT("Short swing has one target"), Controller->FarmActionCells.Num(), 1);
-	Step(false, 0.5f);
+	Step(false, 0.7f);
 	TestEqual(TEXT("Short swing tills front cell"), Grid->GetGroundTile(FIntPoint(-1, 0)), EPSTileType::TilledSoil);
 	TestEqual(TEXT("Short swing leaves side cell alone"), Grid->GetGroundTile(FIntPoint(-1, 1)), EPSTileType::Grass);
 	ClearTargets();
@@ -104,7 +104,7 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	Step(false, 0);
 	TestTrue(TEXT("Release locks movement for use"), Farmer->IsMovementLocked());
 	TestEqual(TEXT("Charged swing has three targets"), Controller->FarmActionCells.Num(), 3);
-	Step(false, 0.49f);
+	Step(false, 0.69f);
 	TestEqual(TEXT("Charge time does not replace use time"), Grid->GetGroundTile(FIntPoint(-1, 0)), EPSTileType::Grass);
 	Step(false, 0.01f);
 	for (const auto Cell : Controller->GetFarmTargetCells(true))
@@ -129,7 +129,7 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 		}
 		ClearTargets();
 		TestTrue(TEXT("Charged action works in every direction"), Controller->BeginFarmAction(true));
-		Controller->UpdateFarmAction(0.5f);
+		Controller->UpdateFarmAction(0.7f);
 		for (const auto Cell : Cells) TestEqual(TEXT("Rotated range matches effect"), Grid->GetGroundTile(Cell), EPSTileType::TilledSoil);
 	}
 	Farmer->Move(FInputActionValue(FVector2D(0, -1)));
@@ -137,9 +137,9 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	const auto Cells = Controller->GetFarmTargetCells(true);
 	SetTile(Cells[0], EPSTileType::Grass, true);
 	SetTile(Cells[1], EPSTileType::Water);
-	TestEqual(TEXT("Blocked target has invalid charged preview"), Controller->EvaluateFarmActionCell(Cells[0], true), EPSTileInteractionResult::NoEffect);
+	TestEqual(TEXT("Blocked target has invalid charged preview"), Controller->EvaluateFarmTarget(Cells[0]), EPSTileInteractionResult::NoEffect);
 	TestTrue(TEXT("Valid side cell starts action even when center is blocked"), Controller->BeginFarmAction(true));
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	TestEqual(TEXT("Blocked center is preserved"), Grid->GetStoneHealth(Cells[0]), 30);
 	TestEqual(TEXT("Water side is preserved"), Grid->GetGroundTile(Cells[1]), EPSTileType::Water);
 	TestEqual(TEXT("Eligible side is tilled"), Grid->GetGroundTile(Cells[2]), EPSTileType::TilledSoil);
@@ -149,7 +149,7 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	ClearTargets();
 	Controller->BeginFarmAction(true);
 	for (const auto Cell : Cells) SetTile(Cell, EPSTileType::Water);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	TestEqual(TEXT("Effect-time revalidation consumes no durability on total failure"), Inventory->GetHotbarSlot(6).CurrentDurability, Durability);
 	ClearTargets();
 	SetTile(Cells[1], EPSTileType::TilledSoil);
@@ -157,7 +157,7 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	FPSChunkData& Chunk = Grid->GetOrCreateChunk(PSGrid::CellToChunk(Cells[1], Grid->ChunkSize));
 	Chunk.Cells[PSGrid::LocalToIndex(PSGrid::CellToLocal(Cells[1], Grid->ChunkSize), Grid->ChunkSize)].GrowthStage = PSCropGrowth::MaxStage;
 	Controller->BeginFarmAction(true);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	TestEqual(TEXT("Charged tilling never harvests mature crop"), Grid->GetCropStage(Cells[1]), PSCropGrowth::MaxStage);
 
 	ClearTargets();
@@ -192,13 +192,13 @@ bool FPSChargedHoeTest::RunTest(const FString& Parameters)
 	Controller->UpdateFarmAction(0.5f);
 	const auto TurnedCells = Controller->GetFarmTargetCells(true);
 	Controller->HandleSpecialAttackReleased();
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	for (const auto Cell : TurnedCells) TestEqual(TEXT("Release snapshots the current facing"), Grid->GetGroundTile(Cell), EPSTileType::TilledSoil);
 	ClearTargets();
 	bool bDestroyed = false;
 	Inventory->ConsumeHotbarDurability(6, Inventory->GetHotbarSlot(6).CurrentDurability - 1, bDestroyed);
 	Controller->BeginFarmAction(true);
-	Controller->UpdateFarmAction(0.5f);
+	Controller->UpdateFarmAction(0.7f);
 	for (const auto Cell : TurnedCells) TestEqual(TEXT("Last durability completes entire range"), Grid->GetGroundTile(Cell), EPSTileType::TilledSoil);
 	TestTrue(TEXT("Last swing removes broken upgraded hoe"), Inventory->GetHotbarSlot(6).IsEmpty());
 	TestFalse(TEXT("Broken tool never leaves movement locked"), Farmer->IsMovementLocked());

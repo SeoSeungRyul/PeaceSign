@@ -282,11 +282,6 @@ bool UPSFishingWidget::ApplyArtworkDesignerLayout(UObject* WidgetBlueprintAsset)
 	NoticeLabel->SetAutoWrapText(true);
 	UCanvasPanel* Bite = Panel(TEXT("FishBitePanel"), FVector2D(1510, 400), FVector2D(120, 148));
 	Image(Bite, TEXT("BiteBubbleArtwork"), TEXT("Fish_Ballon/Fish_Ballon_Catch"), FVector2D::ZeroVector, FVector2D(120, 123));
-	UBorder* BiteHint = Tree->ConstructWidget<UBorder>();
-	BiteHint->SetPadding(FMargin(0)); BiteHint->SetBrush(FSlateRoundedBoxBrush(FLinearColor(1, .94f, .78f, .95f), 5));
-	Place(Bite, BiteHint, FVector2D(10, 126), FVector2D(100, 22));
-	UCanvasPanel* HintCanvas = Tree->ConstructWidget<UCanvasPanel>(); BiteHint->SetContent(HintCanvas);
-	Text(HintCanvas, TEXT("BiteActionLabel"), TEXT("F / 우클릭"), FVector2D(0, 1), FVector2D(100, 20), 14);
 	return InitializeDesignerLayout(Blueprint);
 #else
 	return false;

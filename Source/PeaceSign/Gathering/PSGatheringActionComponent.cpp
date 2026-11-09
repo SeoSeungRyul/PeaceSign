@@ -21,8 +21,8 @@ void UPSGatheringActionComponent::Feedback(const FString& Message) const
 
 bool UPSGatheringActionComponent::HandleTree(APSGridWorld* Grid, const FIntPoint Cell)
 {
-	if (!IsValid(Grid) || !Grid->Gathering->HasTree(Cell)) return false;
-	if (bActive) return true;
+	if (!IsValid(Grid) || !Grid->Gathering->OccupiesTreeCell(Cell)) return false;
+	if (bActive || !Grid->Gathering->HasTree(Cell)) return true;
 	auto* Controller = Cast<APSPlayerController>(GetOwner());
 	auto* Pawn = Controller ? Cast<APSPlayerCharacter>(Controller->GetPawn()) : nullptr;
 	if (!Pawn || !Pawn->StatsComponent || Pawn->StatsComponent->Health <= 0 || Controller->IsPaused()
@@ -32,10 +32,10 @@ bool UPSGatheringActionComponent::HandleTree(APSGridWorld* Grid, const FIntPoint
 	if (!Grid->Gathering->CanReach(Grid->WorldToCell(Pawn->GetActorLocation()), Cell, Pawn))
 		{ Feedback(TEXT("나무에 더 가까이 다가가세요.")); return true; }
 	const auto Tree = Grid->Gathering->GetTree(Cell);
-	if (Tree.Health <= 0) { Feedback(TEXT("그루터기입니다.")); return true; }
 	Slot = Controller->GetSelectedHotbarSlot();
 	Tool = Controller->GetInventoryComponent()->GetHotbarSlot(Slot);
 	bChopping = !Tool.IsEmpty() && Tool.ItemType == EPSItemType::Axe;
+	if (Tree.IsSapling() && !bChopping) { Feedback(TEXT("묘목이 자라는 중입니다.")); return true; }
 	FString DataError;
 	if (!Grid->Gathering->ValidateRewardData(Cell, bChopping, DataError))
 	{ Feedback(TEXT("채집 데이터 설정을 확인하세요: ") + DataError); return true; }
@@ -63,9 +63,9 @@ bool UPSGatheringActionComponent::IsContextValid() const
 	const auto* Grid = ActionGrid.Get();
 	if (!Controller || !IsValid(Pawn) || Controller->GetPawn() != Pawn || !IsValid(Grid)
 		|| Pawn->StatsComponent->Health <= 0 || !Pawn->IsMovementLocked() || Controller->IsFishing()
-		|| !Grid->Gathering->IsUnlocked() || !Grid->Gathering->HasTree(Target)
-		|| !Grid->Gathering->CanReach(Grid->WorldToCell(Pawn->GetActorLocation()), Target, Pawn)) return false;
-	if (bCommitted) return true; // A last-durability hit may have removed the axe.
+		|| !Grid->Gathering->IsUnlocked()) return false;
+	if (bCommitted) return true; // The hit may have removed the tree or broken the axe.
+	if (!Grid->Gathering->CanReach(Grid->WorldToCell(Pawn->GetActorLocation()), Target, Pawn)) return false;
 	const auto Current = Controller->GetInventoryComponent()->GetHotbarSlot(Slot);
 	return Controller->GetSelectedHotbarSlot() == Slot && Current.ItemType == Tool.ItemType
 		&& Current.ItemId == Tool.ItemId && Current.Quantity == Tool.Quantity && Current.CurrentDurability == Tool.CurrentDurability
@@ -88,7 +88,7 @@ void UPSGatheringActionComponent::Advance(const float DeltaSeconds)
 		if (bChopping && !Pawn->StatsComponent->TryConsumeStamina(Axe.StaminaCost)) { Cancel(); Feedback(TEXT("SP가 부족합니다.")); return; }
 		bCommitted = true;
 		bool bHadReward = false;
-		bSuccess = bChopping ? World->Strike(Target, Axe) : World->Shake(Target, &bHadReward);
+		bSuccess = bChopping ? World->Strike(Target, Axe, Pawn) : World->Shake(Target, &bHadReward, Pawn);
 		if (bChopping && !bSuccess)
 		{
 			Pawn->StatsComponent->Stamina = StaminaBefore;

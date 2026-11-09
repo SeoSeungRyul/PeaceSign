@@ -10,7 +10,7 @@ public class PeaceSign : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "Paper2D", "UMG", "SlateCore" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "RenderCore" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "RenderCore", "RHI", "Water" });
 		if (Target.bBuildEditor)
 		{
 			PrivateDependencyModuleNames.Add("UnrealEd");

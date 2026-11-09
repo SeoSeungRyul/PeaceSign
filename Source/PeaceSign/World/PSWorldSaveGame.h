@@ -6,6 +6,7 @@
 #include "GameFramework/SaveGame.h"
 #include "PSTileTypes.h"
 #include "../Gathering/PSGatheringTypes.h"
+#include "../Gathering/PSBushWorldComponent.h"
 #include "PSWorldSaveGame.generated.h"
 
 UCLASS()
@@ -17,9 +18,12 @@ public:
 	UPROPERTY(SaveGame)
 	int32 DataVersion = 0;
 	UPROPERTY(SaveGame) TArray<FPSTreeRecord> GatheringTrees;
+	UPROPERTY(SaveGame) TSet<FName> RemovedGatheringPlacements;
 	UPROPERTY(SaveGame) TArray<FPSGatheringDrop> GatheringDrops;
 	UPROPERTY(SaveGame) bool bGatheringInitialized = false;
 	UPROPERTY(SaveGame) bool bGatheringUnlocked = false;
+	UPROPERTY(SaveGame) TArray<FPSBushRecord> Bushes;
+	UPROPERTY(SaveGame) bool bBushesInitialized = false;
 
 	UPROPERTY(SaveGame)
 	int32 WorldSeed = 1337;
@@ -38,6 +42,8 @@ public:
 	// Reference for restoring crop ages when a new session's clock starts at 06:00.
 	UPROPERTY(SaveGame)
 	int64 GrowthClockHalfHour = -1;
+	UPROPERTY(SaveGame)
+	double FarmGrowthMinute = -1;
 
 	UPROPERTY(SaveGame)
 	int64 SavedClockHalfHour = -1;

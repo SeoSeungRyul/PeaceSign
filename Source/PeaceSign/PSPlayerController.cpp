@@ -2,6 +2,7 @@
 
 #include "PSPlayerController.h"
 #include "Gathering/PSGatheringActionComponent.h"
+#include "Gathering/PSBushInteractionComponent.h"
 #include "Gathering/PSGatheringWorldComponent.h"
 #include "Data/PSGameDataTables.h"
 #include "PSPlayerStatsComponent.h"
@@ -116,6 +117,7 @@ namespace
 APSPlayerController::APSPlayerController()
 {
 	GatheringAction = CreateDefaultSubobject<UPSGatheringActionComponent>(TEXT("GatheringAction"));
+	BushInteraction = CreateDefaultSubobject<UPSBushInteractionComponent>(TEXT("BushInteraction"));
 	InventoryComponent = CreateDefaultSubobject<UPSInventoryComponent>(TEXT("InventoryComponent"));
 	SkillComponent = CreateDefaultSubobject<UPSPlayerSkillComponent>(TEXT("SkillComponent"));
 	FishingJournalComponent = CreateDefaultSubobject<UPSFishingJournalComponent>(TEXT("FishingJournalComponent"));
@@ -256,6 +258,8 @@ void APSPlayerController::SetupInputComponent()
 	if (InteractAction)
 	{
 		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Started, this, &APSPlayerController::HandleInteract);
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Completed, this, &APSPlayerController::HandleInteractReleased);
+		EnhancedInputComponent->BindAction(InteractAction, ETriggerEvent::Canceled, this, &APSPlayerController::HandleInteractReleased);
 	}
 	if (SpecialAttackAction)
 	{
@@ -320,11 +324,14 @@ void APSPlayerController::PlayerTick(const float DeltaTime)
 	// A newly pressed tool must not consume time elapsed before that press.
 	UpdateFarmAction(DeltaTime);
 	if (!IsPaused()) UpdateFishing(DeltaTime);
+	const bool bWasHarvesting = CropHarvestTarget.IsSet();
+	const uint32 HarvestSession = CropHarvestSession;
 	Super::PlayerTick(DeltaTime);
+	if (bWasHarvesting && HarvestSession == CropHarvestSession) AdvanceCropHarvest(DeltaTime);
 	UpdateStatusWidget();
 	UpdateFarmTargetMarker();
 	if (bInventoryOpen) return;
-	if (UsesFarmTool()) return;
+	if (UsesFarmTool() || Equipment == EPSEquipment::TreeSeed) return;
 	HoveredCell = GetCursorCell();
 
 	if (!HoveredCell.IsSet())
@@ -387,6 +394,8 @@ void APSPlayerController::HandleInteract()
 	if (GatheringAction->IsGatheringActive()) return;
 	if (bFarmActionActive || bFarmCharging || IsPaused()) return;
 	if (AreFishingControlsLocked() && Equipment != EPSEquipment::FishingRod) return;
+	if (BeginCropHarvest()) return;
+	if (BushInteraction->Press(GridWorld, false)) return;
 	if (Equipment == EPSEquipment::FishingRod)
 	{
 		HandleFishingRod();
@@ -398,16 +407,25 @@ void APSPlayerController::HandleInteract()
 void APSPlayerController::HandleSpecialAttack()
 {
 	if (GatheringAction->IsGatheringActive()) return;
-	if (bFarmActionActive || bFarmCharging || bInventoryOpen || bJournalOpen || IsPaused()) return;
+	if (CropHarvestTarget.IsSet() || bFarmActionActive || bFarmCharging || bInventoryOpen || bJournalOpen || IsPaused()) return;
 	if (AreFishingControlsLocked() && Equipment != EPSEquipment::FishingRod) return;
+	const TOptional<FIntPoint> TargetCell = GetCursorCell();
+	if (BushInteraction->Press(GridWorld, true, TargetCell)) return;
+	if (Equipment == EPSEquipment::TreeSeed)
+	{
+		if (!TargetCell.IsSet()) return;
+		const bool bPlanted = UseEquippedItemOnCell(TargetCell.GetValue()) == EPSTileInteractionResult::Planted;
+		if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 2.0f, bPlanted ? FColor::Green : FColor::Red,
+			bPlanted ? TEXT("나무 씨앗을 심었습니다.") : TEXT("가까운 빈 풀·물 타일에 나무 씨앗을 심을 수 있습니다."));
+		return;
+	}
 	if (!IsFishing())
 	{
-		const auto TreeCell = GetCursorCell();
-		if (TreeCell.IsSet() && GatheringAction->HandleTree(GridWorld, TreeCell.GetValue())) return;
+		if (TargetCell.IsSet() && GatheringAction->HandleTree(GridWorld, TargetCell.GetValue())) return;
 	}
 	if (UsesFarmTool())
 	{
-		if (CanChargeEquippedHoe()) BeginFarmCharge();
+		if (GetEquippedFarmChargeDepth() > 0) BeginFarmCharge();
 		else BeginFarmAction();
 		return;
 	}
@@ -417,8 +435,6 @@ void APSPlayerController::HandleSpecialAttack()
 		HandleFishingRod();
 		return;
 	}
-	// Resolve the cursor at click time, not from the previous frame's highlight.
-	const TOptional<FIntPoint> TargetCell = GetCursorCell();
 	if (TargetCell.IsSet())
 	{
 		const EPSEquipment UsedEquipment = Equipment;
@@ -455,13 +471,30 @@ void APSPlayerController::HandleSpecialAttack()
 	}
 }
 
+void APSPlayerController::HandleInteractReleased()
+{
+	CancelCropHarvest();
+	BushInteraction->Release(false);
+}
+
+const APSPlayerCharacter* APSPlayerController::GetTreeSeedPlanter() const
+{
+	const auto* Planter = Cast<APSPlayerCharacter>(GetPawn());
+	if (!IsValid(Planter) || !Planter->StatsComponent || Planter->StatsComponent->Health <= 0
+		|| Planter->IsRolling() || Planter->IsMovementLocked() || IsPaused() || IsFishing()
+		|| bInventoryOpen || bJournalOpen || UWidgetBlueprintLibrary::IsDragDropping()) return nullptr;
+	return Planter;
+}
+
 EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPoint Cell)
 {
 	if (!GridWorld) return EPSTileInteractionResult::InvalidCell;
-	if (Equipment == EPSEquipment::WateringCan) return GridWorld->WaterCell(Cell);
-	// Hoes are farming tools; stones are handled by the separate mining equipment path.
-	if (Equipment == EPSEquipment::Hoe && GridWorld->GetWorldObjectType(Cell) != EPSWorldObjectType::None)
-		return EPSTileInteractionResult::NoEffect;
+	if (Equipment == EPSEquipment::TreeSeed)
+	{
+		return GridWorld->Gathering->PlantSeed(GetTreeSeedPlanter(), Cell, InventoryComponent, SelectedHotbarSlot)
+			? EPSTileInteractionResult::Planted : EPSTileInteractionResult::InvalidCell;
+	}
+	if (UsesFarmTool()) return ApplyFarmTool(MakeArrayView(&Cell, 1));
 	// Handle the shovel before the shared stone-mining path: it only changes ground.
 	if (Equipment == EPSEquipment::Shovel)
 	{
@@ -520,52 +553,8 @@ EPSTileInteractionResult APSPlayerController::UseEquippedItemOnCell(const FIntPo
 	{
 	case EPSEquipment::BareHands:
 		return GridWorld->RemoveCrop(Cell);
-	case EPSEquipment::Hoe:
-	{
-		const bool bMatureCrop = GridWorld->GetCropType(Cell) != EPSCropType::None
-			&& GridWorld->GetCropStage(Cell) >= PSCropGrowth::MaxStage;
-		const int32 CropId = GridWorld->GetCropId(Cell);
-		if (bMatureCrop && (!InventoryComponent
-			|| !InventoryComponent->CanAddItem(EPSItemType::TestCrop, 1, CropId)))
-			return EPSTileInteractionResult::InventoryFull;
-		EPSTileInteractionResult Result = GridWorld->HarvestCrop(Cell);
-		if (Result != EPSTileInteractionResult::Harvested)
-		{
-			Result = GridWorld->TillCell(Cell);
-			if (Result == EPSTileInteractionResult::Tilled && InventoryComponent)
-			{
-				bool bDestroyed = false;
-				InventoryComponent->ConsumeHotbarDurability(SelectedHotbarSlot, 1, bDestroyed);
-			}
-			return Result;
-		}
-		if (!InventoryComponent->AddItem(EPSItemType::TestCrop, 1, CropId))
-		{
-			ensureMsgf(false, TEXT("Harvest capacity changed after it was validated."));
-			return EPSTileInteractionResult::NoEffect;
-		}
-		++HarvestedCropCount;
-		if (SkillComponent) SkillComponent->AddExperience(EPSPlayerSkillField::Farming, 2);
-		bool bDestroyed = false;
-		InventoryComponent->ConsumeHotbarDurability(SelectedHotbarSlot, 1, bDestroyed);
-		if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
-		return Result;
-	}
 	case EPSEquipment::Seed:
-	{
-		const FPSItemStack* Seed = InventoryComponent
-			? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
-		if (!Seed || Seed->ItemType != EPSItemType::TestSeed || Seed->Quantity <= 0)
-			return EPSTileInteractionResult::NoEffect;
-		const EPSTileInteractionResult Result = GridWorld->PlantSeed(Cell, Seed->CropId);
-		if (Result == EPSTileInteractionResult::Planted
-			&& !InventoryComponent->RemoveFromHotbarSlot(SelectedHotbarSlot, 1))
-		{
-			GridWorld->RemoveCrop(Cell);
-			return EPSTileInteractionResult::NoEffect;
-		}
-		return Result;
-	}
+		return PlantEquippedCrop(Cell);
 	case EPSEquipment::FishingRod:
 	case EPSEquipment::UnusableItem:
 	default:
@@ -580,6 +569,7 @@ void APSPlayerController::HandleHotbarSlot(const FInputActionValue& Value, const
 
 void APSPlayerController::SelectHotbarSlot(const int32 SlotIndex)
 {
+	if (SlotIndex != SelectedHotbarSlot) CancelCropHarvest();
 	if (GatheringAction->IsGatheringActive()) return;
 	if (bFarmActionActive) return;
 	if (bFarmCharging) CancelFarmAction();
@@ -612,6 +602,7 @@ void APSPlayerController::RefreshEquipmentFromHotbar()
 		case EPSItemType::Shovel: NewEquipment = EPSEquipment::Shovel; break;
 		case EPSItemType::WateringCan: NewEquipment = EPSEquipment::WateringCan; break;
 		case EPSItemType::Axe: NewEquipment = EPSEquipment::Axe; break;
+		case EPSItemType::TreeSeed: NewEquipment = EPSEquipment::TreeSeed; break;
 		default: NewEquipment = EPSEquipment::UnusableItem; break;
 		}
 	}
@@ -1099,13 +1090,7 @@ UTexture2D* APSPlayerController::GetItemIcon(const FPSItemStack& Item) const
 		return Fish ? ResolveFishIcon(Fish->IconID) : nullptr;
 	}
 	const UPSGatheringWorldComponent* Gathering = GridWorld ? GridWorld->Gathering.Get() : nullptr;
-	FPSItemTableRow Data;
-	if (!Gathering || !UPSGameDataLibrary::FindItem(Gathering->ItemTable, Item.ItemId, Data)
-		|| Data.IconID.IsNone() || !Gathering->ItemIconTable
-		|| Gathering->ItemIconTable->GetRowStruct() != FPSIconDefinition::StaticStruct()) return nullptr;
-	const FPSIconDefinition* Icon = Gathering->ItemIconTable->FindRow<FPSIconDefinition>(
-		Data.IconID, TEXT("Gathering item icon lookup"), false);
-	return Icon ? Icon->Image.LoadSynchronous() : nullptr;
+	return Gathering ? Gathering->GetItemIcon(Item) : nullptr;
 }
 
 bool APSPlayerController::CancelFishingForMovementInput()
@@ -1184,7 +1169,7 @@ void APSPlayerController::DropFishingReward(const int32 Quantity)
 		Stack.ItemType = EPSItemType::Fish;
 		Stack.ItemId = CurrentFishId;
 		Stack.Quantity = FMath::Max(1, Quantity);
-		Drop->InitializeItem(Stack);
+		Drop->InitializeItem(Stack, GridWorld);
 		Drop->FinishSpawning(SpawnTransform);
 	}
 }
@@ -1263,11 +1248,12 @@ void APSPlayerController::SetEquipment(const EPSEquipment InEquipment)
 	if (Equipment != InEquipment && !bEndingFishing && IsFishing()) StopFishing();
 	Equipment = InEquipment;
 	const FPSItemStack* Stack = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
-	if (StatusWidget) StatusWidget->SetEquipment(Equipment, SelectedHotbarSlot, Stack ? Stack->Quantity : 0, GetEquippedHoeChargeDepth());
+	if (StatusWidget) StatusWidget->SetEquipment(Equipment, SelectedHotbarSlot, Stack ? Stack->Quantity : 0, GetEquippedFarmChargeDepth());
 }
 
 void APSPlayerController::HandleInventory()
 {
+	BushInteraction->Cancel();
 	GatheringAction->Cancel();
 	if (bJournalOpen) { CloseFishingJournal(); return; }
 	if (bFarmActionActive) return;
@@ -1322,6 +1308,7 @@ void APSPlayerController::CloseInventory()
 
 void APSPlayerController::HandleQuest()
 {
+	BushInteraction->Cancel();
 	if (GatheringAction->IsGatheringActive()) return;
 	if (bFarmActionActive) return;
 	if (bFarmCharging) CancelFarmAction();
@@ -1332,6 +1319,7 @@ void APSPlayerController::HandleQuest()
 
 void APSPlayerController::HandleAbility()
 {
+	BushInteraction->Cancel();
 	if (GatheringAction->IsGatheringActive()) return;
 	if (bFarmActionActive) return;
 	if (bFarmCharging) CancelFarmAction();
@@ -1342,6 +1330,7 @@ void APSPlayerController::HandleAbility()
 
 void APSPlayerController::HandleCraft()
 {
+	BushInteraction->Cancel();
 	if (GatheringAction->IsGatheringActive()) return;
 	if (bFarmActionActive) return;
 	if (bFarmCharging) CancelFarmAction();
@@ -1352,6 +1341,7 @@ void APSPlayerController::HandleCraft()
 
 void APSPlayerController::HandleResetWorld()
 {
+	CancelCropHarvest();
 	GatheringAction->Cancel();
 	CancelFarmAction();
 	if (!GridWorld)
@@ -1367,8 +1357,25 @@ void APSPlayerController::HandleResetWorld()
 		{
 			It->Destroy();
 		}
-		SelectedHotbarSlot = INDEX_NONE;
-		if (InventoryComponent) InventoryComponent->ResetToDefaults();
+		if (InventoryComponent)
+		{
+			InventoryComponent->RestoreAllDurability();
+			constexpr int32 ResetLettuceStock = 100;
+			const int32 Owned = InventoryComponent->CountItem(EPSItemType::TestCrop, PSItemIds::LettuceCropId);
+			if (Owned < ResetLettuceStock)
+			{
+				FPSItemStack Lettuce;
+				Lettuce.ItemType = EPSItemType::TestCrop;
+				Lettuce.ItemId = PSItemIds::Lettuce;
+				Lettuce.CropId = PSItemIds::LettuceCropId;
+				Lettuce.Quantity = ResetLettuceStock - Owned;
+				if (!InventoryComponent->AddItemVariant(Lettuce.ItemType, Lettuce.ItemId, Lettuce.Quantity, Lettuce.CropId))
+				{
+					const FIntPoint Cell = GetPawn() ? GridWorld->WorldToCell(GetPawn()->GetActorLocation()) : FIntPoint::ZeroValue;
+					GridWorld->Gathering->DropItemStack(Cell, Lettuce);
+				}
+			}
+		}
 		HarvestedCropCount = 0;
 		if (StatusWidget) StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
 	}
@@ -1406,7 +1413,7 @@ void APSPlayerController::DropItemReward(const FIntPoint Cell, const FPSItemStac
 	APSWorldItemActor* Drop = GetWorld()->SpawnActorDeferred<APSWorldItemActor>(
 		APSWorldItemActor::StaticClass(), SpawnTransform, nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Drop) return;
-	Drop->InitializeItem(Stack);
+	Drop->InitializeItem(Stack, GridWorld);
 	Drop->FinishSpawning(SpawnTransform);
 }
 
@@ -1432,7 +1439,7 @@ void APSPlayerController::UpdateStatusWidget()
 		StatusWidget->SetPositionInViewport(FVector2D(24.0f, 24.0f), false);
 		StatusWidget->SetDesiredSizeInViewport(FVector2D(280.0f, 340.0f));
 		const FPSItemStack* Stack = InventoryComponent ? InventoryComponent->FindHotbarSlot(SelectedHotbarSlot) : nullptr;
-		StatusWidget->SetEquipment(Equipment, SelectedHotbarSlot, Stack ? Stack->Quantity : 0, GetEquippedHoeChargeDepth());
+		StatusWidget->SetEquipment(Equipment, SelectedHotbarSlot, Stack ? Stack->Quantity : 0, GetEquippedFarmChargeDepth());
 		StatusWidget->SetHarvestedCropCount(HarvestedCropCount);
 		StatusPawn = GetPawn();
 		StatusWidget->SetStatsComponent(GetPawn() ? GetPawn()->FindComponentByClass<UPSPlayerStatsComponent>() : nullptr);
@@ -1446,6 +1453,7 @@ void APSPlayerController::UpdateStatusWidget()
 
 void APSPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	CancelCropHarvest();
 	GatheringAction->Cancel();
 	CancelFarmAction();
 	if (IsValid(FarmTargetMarker)) FarmTargetMarker->Destroy();

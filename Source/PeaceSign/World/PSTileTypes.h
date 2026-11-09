@@ -23,7 +23,8 @@ enum class EPSWorldObjectType : uint8
 {
 	None,
 	Stone,
-	Tree
+	Tree,
+	Bush
 };
 
 UENUM(BlueprintType)
@@ -148,6 +149,10 @@ struct FPSTileCell
 	// -1 denotes a legacy crop without a planting timestamp.
 	UPROPERTY(SaveGame)
 	int64 PlantedHalfHour = -1;
+	UPROPERTY(SaveGame)
+	double PlantedFarmMinute = -1;
+	UPROPERTY(SaveGame)
+	double EffectiveGrowthMinutes = 0;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, SaveGame)
 	bool bWatered = false;
 	UPROPERTY(SaveGame)

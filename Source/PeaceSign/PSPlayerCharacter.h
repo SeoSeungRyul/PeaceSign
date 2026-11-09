@@ -26,6 +26,7 @@ public:
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 	virtual void UnPossessed() override;
+	float GetFishingCameraBlendSeconds() const { return FMath::IsFinite(FishingCameraBlendSeconds) ? FMath::Max(0.f, FishingCameraBlendSeconds) : 1.2f; }
 	virtual float TakeDamage(float DamageAmount, const FDamageEvent& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
 	UFUNCTION(BlueprintCallable, Category="Movement") void SetMovementLocked(bool bLocked);
 	UFUNCTION(BlueprintPure, Category="Movement") bool IsMovementLocked() const { return bMovementLocked; }
@@ -38,6 +39,7 @@ public:
 	float PlayFishingStateAnimation(EPSFishingState State);
 	bool IsFishingStateAnimationPlaying() const;
 	bool IsRolling() const { return bIsRolling; }
+	bool HasMovementInput() const { return !CurrentMovementInput.IsNearlyZero(); }
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Stats")
 	TObjectPtr<UPSPlayerStatsComponent> StatsComponent;
 
@@ -51,9 +53,9 @@ protected:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Camera")
 	TObjectPtr<UCameraComponent> Camera;
-	/** Duration of the pan to the bobber and back. Zero switches immediately. Zoom stays unchanged. */
+	/** Ease-in/out duration of the pan to the bobber and back. Zero switches immediately. Zoom stays unchanged. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing|Camera", meta = (ClampMin = "0.0"))
-	float FishingCameraBlendSeconds = .35f;
+	float FishingCameraBlendSeconds = 1.2f;
 
 	// The pawn owns actions that directly operate the pawn.
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Input")

@@ -75,6 +75,17 @@ bool FPSFishingOct26Test::RunTest(const FString&)
 	TestTrue(TEXT("Top-down departure is faster than the middle"), FVector::Dist2D(TopDownPosition(0), TopDownPosition(.1f)) > TopDownMiddleSpeed);
 	TestTrue(TEXT("Top-down arrival is faster than the middle"), FVector::Dist2D(TopDownPosition(.9f), TopDownPosition(1)) > TopDownMiddleSpeed);
 	TestEqual(TEXT("Top-down flight still lands exactly on water"), TopDownPosition(1), ThrowEnd);
+	const float CrestTime = CatchVisual->FloatPeriod * .25f;
+	const FVector Crest = ThrowEnd + FVector::ForwardVector * CatchVisual->FloatAmplitude;
+	const FVector TopDownMidFlight = TopDownPosition(.5f);
+	CatchVisual->UpdateVisual(ThrowStart, ThrowEnd, false, CrestTime, 0, .5f, FVector::ForwardVector);
+	TestEqual(TEXT("Float motion does not affect flight"), CatchVisual->GetActorLocation(), TopDownMidFlight);
+	CatchVisual->UpdateVisual(ThrowStart, ThrowEnd, false, CrestTime, 0, 1, FVector::ForwardVector);
+	TestTrue(TEXT("Landed bobber rises along screen-up"), CatchVisual->GetActorLocation().Equals(Crest));
+	CatchVisual->UpdateVisual(ThrowStart, ThrowEnd, false, CrestTime * 3, 0, 1, FVector::ForwardVector);
+	TestTrue(TEXT("Landed bobber falls back below its resting point"), CatchVisual->GetActorLocation().Equals(ThrowEnd - FVector::ForwardVector * CatchVisual->FloatAmplitude));
+	CatchVisual->UpdateVisual(ThrowStart, ThrowEnd, false, CrestTime, .5f, 1, FVector::ForwardVector);
+	TestTrue(TEXT("Retrieval starts from the bobber's floating position"), CatchVisual->GetActorLocation().Equals(FMath::Lerp(Crest, ThrowStart, .5f)));
 #if WITH_EDITOR
 	// Force a fresh editor texture build rather than testing only already-cached assets.
 	UTexture2D* ColdFish = NewObject<UTexture2D>(World);

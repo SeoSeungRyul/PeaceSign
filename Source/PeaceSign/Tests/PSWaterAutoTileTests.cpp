@@ -251,7 +251,15 @@ bool FPSWaterAutoTileTest::RunTest(const FString& Parameters)
 			FVector::DotProduct(ImageTop, ScreenUp) > 0.99);
 		UMaterialInstanceDynamic* Material = Cast<UMaterialInstanceDynamic>(Water->GetMaterial(0));
 		TestNotNull(TEXT("Water dynamic material"), Material);
-		if (Material) TestNotNull(TEXT("Water SpriteTexture assigned"), Material->K2_GetTextureParameterValue(TEXT("SpriteTexture")));
+		if (Material)
+		{
+			TestNotNull(TEXT("Water SpriteTexture assigned"), Material->K2_GetTextureParameterValue(TEXT("SpriteTexture")));
+			auto* Surface = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Art/Tiles/Water/MI_WaterSurface.MI_WaterSurface"));
+			TestNotNull(TEXT("Animated surface asset resolves"), Surface);
+			TestTrue(TEXT("Water uses its dedicated animated parent"), Material->Parent == Surface);
+			TestTrue(TEXT("Water ripples enabled by default"), Material->K2_GetScalarParameterValue(TEXT("RippleStrength")) > 0.0f);
+			TestTrue(TEXT("Water ripple speed configured"), Material->K2_GetScalarParameterValue(TEXT("RippleSpeed")) > 0.0f);
+		}
 		Renderer->Rebuild(Single, 1, 100);
 		TestEqual(TEXT("Rebuild clears previous water instances"), Water->GetInstanceCount(), 1);
 		Single.Cells[0].GroundType = EPSTileType::Grass;

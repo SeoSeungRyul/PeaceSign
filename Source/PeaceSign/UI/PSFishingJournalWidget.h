@@ -64,6 +64,7 @@ private:
 	UFUNCTION() void ArtifactTab();
 	void UpdateCategoryTabs();
 	void ClearDetails();
+	TArray<FName> GetCategoryIds() const;
 	FName SelectedFish;
 	int32 Category = 0;
 	int32 Page = 0;

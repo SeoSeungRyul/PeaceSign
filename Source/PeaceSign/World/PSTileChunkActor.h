@@ -13,6 +13,8 @@ class UStaticMesh;
 class UTexture2D;
 class UBoxComponent;
 class UPSDirtAutoTileSet;
+class UChildActorComponent;
+class UWaterWavesAsset;
 struct FPSChunkData;
 
 UCLASS()
@@ -23,9 +25,13 @@ class PEACESIGN_API APSTileChunkActor : public AActor
 public:
 	APSTileChunkActor();
 	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void SetActorHiddenInGame(bool bNewHidden) override;
 
 	void Rebuild(const FPSChunkData& ChunkData, int32 ChunkSize, float CellSize,
-		const UPSDirtAutoTileSet* DirtTileSet = nullptr);
+		const UPSDirtAutoTileSet* DirtTileSet = nullptr, bool bNativeWater = false);
+	static float GetNativeWaterSurfaceOffset(UWorld* World, FVector Position);
+	/** Swap only water visuals; used by the isolated native-water comparison. */
+	void SetWaterSurfaceOverride(UMaterialInterface* Surface);
 
 protected:
 
@@ -91,6 +97,10 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals|Dirt Auto Tile")
 	TObjectPtr<UMaterialInterface> DirtTextureMaterial;
 
+	/** Animated bright-cyan surface only; original shoreline UVs remain fixed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals|Water")
+	TObjectPtr<UMaterialInterface> WaterSurfaceMaterial;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tile Chunk|Visuals")
 	TObjectPtr<UMaterialInterface> StoneMaterial;
 
@@ -101,6 +111,14 @@ protected:
 	float FarmWaterZOffset = 1.0f;
 
 private:
+	UPROPERTY(Transient) TObjectPtr<UChildActorComponent> ChunkNativeWater;
+	UPROPERTY() TObjectPtr<UMaterialInterface> NativeShoreMaterial;
+	UPROPERTY() TObjectPtr<UMaterialInterface> NativeSurfaceMaterial;
+	UPROPERTY() TObjectPtr<UWaterWavesAsset> NativeWaves;
+	UPROPERTY() TObjectPtr<UStaticMesh> NativeMesh;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> OriginalWaterSurface;
+	bool bNativeSurfaceActive = false;
+	void UpdateNativeWater(const FPSChunkData& Data, int32 Size, float CellSize, bool bEnabled);
 	UPROPERTY() TArray<TObjectPtr<UTexture2D>> FarmTextures;
 	UPROPERTY() TObjectPtr<UTexture2D> FarmWaterTexture;
 	UPROPERTY() TObjectPtr<UMaterialInterface> FarmMaterial;

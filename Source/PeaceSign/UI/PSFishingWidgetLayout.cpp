@@ -127,13 +127,10 @@ void UPSFishingWidget::AddBitePanel(UWidgetTree* Tree)
 	UCanvasPanelSlot* Slot = Root->AddChildToCanvas(Bubble);
 	Slot->SetPosition(FVector2D(960, 180)); Slot->SetSize(FVector2D(150, 110)); Slot->SetAlignment(FVector2D(.5f, 1));
 	UVerticalBox* Rows = Tree->ConstructWidget<UVerticalBox>(); Bubble->SetContent(Rows);
-	for (int32 Index = 0; Index < 2; ++Index)
-	{
-		UTextBlock* Text = Tree->ConstructWidget<UTextBlock>();
-		Text->SetText(FText::FromString(Index == 0 ? TEXT("!") : TEXT("F / 우클릭")));
-		FSlateFontInfo Font = WithProjectFont(Text->GetFont()); Font.Size = Index == 0 ? 42 : 16; Text->SetFont(Font);
-		Text->SetColorAndOpacity(FSlateColor(FLinearColor(.25f, .15f, .05f)));
-		Text->SetJustification(ETextJustify::Center);
-		Rows->AddChildToVerticalBox(Text);
-	}
+	UTextBlock* Text = Tree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("BiteExclamationLabel"));
+	Text->SetText(FText::FromString(TEXT("!")));
+	FSlateFontInfo Font = WithProjectFont(Text->GetFont()); Font.Size = 42; Text->SetFont(Font);
+	Text->SetColorAndOpacity(FSlateColor(FLinearColor(.25f, .15f, .05f)));
+	Text->SetJustification(ETextJustify::Center);
+	Rows->AddChildToVerticalBox(Text);
 }

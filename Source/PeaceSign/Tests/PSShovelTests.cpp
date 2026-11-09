@@ -89,10 +89,10 @@ bool FPSShovelTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Outside world is rejected"), Controller->UseEquippedItemOnCell(FIntPoint(1000, 1000)), EPSTileInteractionResult::InvalidCell);
 	TestEqual(TEXT("Rejected uses preserve durability"), Inventory->GetHotbarSlot(4).CurrentDurability, 96);
 	TestEqual(TEXT("No stone reward is generated"), Inventory->CountItem(EPSItemType::Stone), 0);
-	TestTrue(TEXT("Full inventory fixture"), Inventory->AddItem(EPSItemType::Wood, 9990));
+	TestTrue(TEXT("Full inventory fixture"), Inventory->AddItem(EPSItemType::Wood, 8 * 999));
 	Tile.GroundType = EPSTileType::Grass;
 	TestEqual(TEXT("Full bag does not block terrain conversion"), Controller->UseEquippedItemOnCell(Blocked), EPSTileInteractionResult::GroundChanged);
-	TestEqual(TEXT("Terrain conversion adds no bag items"), Inventory->CountItem(EPSItemType::Wood), 9990);
+	TestEqual(TEXT("Terrain conversion adds no bag items"), Inventory->CountItem(EPSItemType::Wood), 8 * 999);
 	TestTrue(TEXT("Inventory saves shovel durability"), Inventory->SaveInventory());
 	TestTrue(TEXT("Inventory reloads shovel"), Inventory->LoadInventory());
 	TestEqual(TEXT("Saved durability is restored"), Inventory->GetHotbarSlot(4).CurrentDurability, 95);

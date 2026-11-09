@@ -64,14 +64,19 @@ struct FPSItemDefinition
 	float FishingTimeBonusRatio = 0.0f;
 	bool bInfiniteDurability = false;
 	int32 MiningPower = 0;
-	/** Charged hoe footprint is three cells wide and this many rows deep. Zero disables charge. */
-	int32 ChargedHoeDepth = 0;
+	/** Charged farm tool footprint is three cells wide and this many rows deep. Zero disables charge. */
+	int32 FarmChargeDepth = 0;
 };
 
 namespace PSItemIds
 {
+	inline constexpr int32 LettuceCropId = 10101;
+	inline const FName Lettuce(TEXT("010101"));
+	inline const FName LettuceSeed(TEXT("Seed.Lettuce"));
 	inline const FName UpgradedHoe(TEXT("Hoe.Upgrade1"));
 	inline const FName SecondUpgradedHoe(TEXT("Hoe.Upgrade2"));
+	inline const FName UpgradedWateringCan(TEXT("WateringCan.Upgrade1"));
+	inline const FName SecondUpgradedWateringCan(TEXT("WateringCan.Upgrade2"));
 	inline const FName StonePickaxe(TEXT("Pickaxe.Stone"));
 	inline const FName CopperPickaxe(TEXT("Pickaxe.Copper"));
 	inline const FName IronPickaxe(TEXT("Pickaxe.Iron"));
@@ -106,6 +111,5 @@ namespace PSItems
 	/** Bare hands and non-pickaxe equipment use the design default of 10. */
 	PEACESIGN_API int32 GetMiningPower(const FPSItemStack* EquippedStack);
 	PEACESIGN_API bool UsesDurability(const FPSItemStack& Stack);
-	PEACESIGN_API bool CanChargeHoe(const FPSItemStack& Stack);
 	PEACESIGN_API bool IsValid(EPSItemType ItemType);
 }

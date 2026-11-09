@@ -16,7 +16,7 @@ class PEACESIGN_API UPSPlayerStatusWidget : public UPSUIWidget
 	GENERATED_BODY()
 public:
 	void SetStatsComponent(UPSPlayerStatsComponent* InStats);
-	void SetEquipment(EPSEquipment InEquipment, int32 HotbarSlot = INDEX_NONE, int32 Quantity = 0, int32 HoeChargeDepth = 0);
+	void SetEquipment(EPSEquipment InEquipment, int32 HotbarSlot = INDEX_NONE, int32 Quantity = 0, int32 FarmChargeDepth = 0);
 	void SetHarvestedCropCount(int32 Count);
 protected:
 	virtual void NativeOnInitialized() override;

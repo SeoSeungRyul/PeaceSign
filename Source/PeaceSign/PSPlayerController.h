@@ -25,8 +25,10 @@ class UInputAction;
 class UInputMappingContext;
 class UTexture2D;
 class APSGridWorld;
+class APSPlayerCharacter;
 class APSFarmTargetMarker;
 class UPSGatheringActionComponent;
+class UPSBushInteractionComponent;
 struct FInputActionValue;
 struct FPSItemStack;
 enum class EPSTileInteractionResult : uint8;
@@ -42,6 +44,8 @@ public:
 	APSPlayerController();
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Gathering")
 	TObjectPtr<UPSGatheringActionComponent> GatheringAction;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Gathering")
+	TObjectPtr<UPSBushInteractionComponent> BushInteraction;
 	virtual void FlushPressedKeys() override;
 	UFUNCTION(BlueprintCallable, Category="UI|Inventory")
 	void CloseInventory();
@@ -69,7 +73,7 @@ public:
 	UFUNCTION(BlueprintPure, Category="Farming") bool IsFarmActionActive() const { return bFarmActionActive; }
 	UFUNCTION(BlueprintPure, Category="Farming") float GetFarmActionTimeRemaining() const { return FarmActionTimeRemaining; }
 	UFUNCTION(BlueprintPure, Category="Farming") bool IsFarmCharging() const { return bFarmCharging; }
-	UFUNCTION(BlueprintPure, Category="Farming") float GetFarmChargeProgress() const { return FMath::Clamp(FarmChargeElapsed / 0.5f, 0.0f, 1.0f); }
+	UFUNCTION(BlueprintPure, Category="Farming") float GetFarmChargeProgress() const { return FMath::Clamp(FarmChargeElapsed / FarmChargeDuration, 0.0f, 1.0f); }
 
 	UFUNCTION(BlueprintCallable, Category = "Fishing")
 	bool TryUseFishingRod(FIntPoint WaterCell);
@@ -103,7 +107,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void OnUnPossess() override;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Farming", meta=(ClampMin="0.01"))
-	float FarmActionDuration = 0.5f;
+	float FarmActionDuration = DefaultFarmActionDuration;
 	UFUNCTION(BlueprintImplementableEvent, Category="Farming")
 	void OnFarmToolStarted(EPSEquipment Tool, FIntPoint Cell, float Duration);
 	UFUNCTION(BlueprintImplementableEvent, Category="Farming")
@@ -201,27 +205,47 @@ protected:
 
 private:
 	friend class FPSFarmToolActionTest;
+	bool CanHarvestCropHere(FIntPoint Cell) const;
+	TOptional<FIntPoint> FindHarvestableCrop() const;
+	bool BeginCropHarvest();
+	void AdvanceCropHarvest(float DeltaTime);
+	void CancelCropHarvest();
+	bool CompleteCropHarvest(FIntPoint Cell);
+	EPSTileInteractionResult PlantEquippedCrop(FIntPoint Cell);
+	void UnlockFarmingFromTilling();
+	static constexpr float CropHarvestDuration = 0.8f;
+	TOptional<FIntPoint> CropHarvestTarget;
+	TWeakObjectPtr<APSGridWorld> CropHarvestGrid;
+	TWeakObjectPtr<APSPlayerCharacter> CropHarvestPawn;
+	FVector CropHarvestStart = FVector::ZeroVector;
+	float CropHarvestHealth = 0;
+	float CropHarvestElapsed = 0;
+	int32 CropHarvestId = INDEX_NONE;
+	double CropHarvestPlanted = -1;
+	uint32 CropHarvestSession = 0;
 	friend class FPSChargedHoeTest;
 	friend class FPSSecondHoeTest;
 	bool UsesFarmTool() const;
-	bool CanChargeEquippedHoe() const;
-	int32 GetEquippedHoeChargeDepth() const;
+	static constexpr float DefaultFarmActionDuration = 0.7f;
+	static constexpr float FarmChargeDuration = 0.5f;
+	static constexpr float FarmToolStaminaCost = 10.0f;
+	int32 GetEquippedFarmChargeDepth() const;
 	bool IsFarmContextValid() const;
 	void CaptureFarmContext();
 	bool BeginFarmCharge();
 	void HandleSpecialAttackReleased();
+	void HandleInteractReleased();
 	void HandleSpecialAttackCanceled();
 	TArray<FIntPoint> GetFarmTargetCells(bool bCharged) const;
-	EPSTileInteractionResult EvaluateFarmActionCell(FIntPoint Cell, bool bCharged) const;
 	TOptional<FIntPoint> GetFarmFrontCell() const;
 	EPSTileInteractionResult EvaluateFarmTarget(FIntPoint Cell) const;
+	EPSTileInteractionResult ApplyFarmTool(TConstArrayView<FIntPoint> Cells);
 	bool BeginFarmAction(bool bCharged = false);
 	void UpdateFarmAction(float DeltaSeconds);
 	void CancelFarmAction();
 	void UpdateFarmTargetMarker();
 	bool bFarmActionActive = false;
 	bool bFarmCharging = false;
-	bool bFarmActionCharged = false;
 	float FarmChargeElapsed = 0;
 	bool bCompletingFarmAction = false;
 	float FarmActionTimeRemaining = 0;
@@ -237,6 +261,10 @@ private:
 	friend class FPSFishingOct26Test;
 	friend class FPSBookJournalTest;
 	friend class FPSGatheringInventoryTest;
+	friend class FPSGatheringTest;
+	friend class FPSBushTest;
+	friend class UPSBushInteractionComponent;
+	friend class FPSWorldResetInventoryTest;
 	friend struct FPSBookJournalSmoke;
 	friend class FPSFishingFlowTest;
 	friend class FPSFarmingInventoryTest;
@@ -311,6 +339,7 @@ private:
 	void HandleHotbarSlot(const FInputActionValue& Value, int32 SlotIndex);
 	UFUNCTION() void RefreshEquipmentFromHotbar();
 	EPSTileInteractionResult UseEquippedItemOnCell(FIntPoint Cell);
+	const APSPlayerCharacter* GetTreeSeedPlanter() const;
 	void SetEquipment(EPSEquipment InEquipment);
 	UPROPERTY(Transient)
 	EPSEquipment Equipment = EPSEquipment::BareHands;

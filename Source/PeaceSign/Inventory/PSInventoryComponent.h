@@ -39,6 +39,7 @@ public:
 	bool IsBagSlotUnlocked(int32 Index) const;
 	UFUNCTION(BlueprintPure, Category="Inventory|Bag")
 	int32 GetUnlockedBagSlotCount() const { return UnlockedBagSlotCount; }
+	TArray<FName> GetDiscoveredGatheringItems() const;
 
 	UFUNCTION(BlueprintPure, Category="Inventory")
 	int32 CountItem(EPSItemType ItemType, int32 CropId = -1) const;
@@ -68,6 +69,7 @@ public:
 	bool ConsumeItemDurability(EPSItemType ItemType, int32 Amount, bool& bDestroyed);
 	UFUNCTION(BlueprintCallable, Category="Inventory|Durability")
 	bool RestoreDurability(EPSInventoryArea Area, int32 SlotIndex, int32 Amount);
+	void RestoreAllDurability();
 	UFUNCTION(BlueprintPure, Category="Inventory|Durability")
 	float GetDurabilityRatio(EPSInventoryArea Area, int32 SlotIndex) const;
 	UFUNCTION(BlueprintCallable, Category="Inventory")
@@ -94,9 +96,13 @@ private:
 	friend class FPSGatheringPreviewTest;
 	void InitializeDefaults();
 	void NotifyChanged();
-	bool TryGrantPendingUpgradedHoe();
-	bool TryGrantPendingHoeVariant(FName ItemId, int32 PreferredSlot, bool& bPending, EPSItemType Type = EPSItemType::Hoe);
+	bool TryGrantPendingItems();
+	bool TryGrantPendingItem(FName ItemId, int32 PreferredHotbarSlot, bool& bPending, EPSItemType Type = EPSItemType::Hoe,
+		int32 Quantity = 1, int32 CropId = INDEX_NONE);
 	UPROPERTY(SaveGame) bool bPendingAxeGrant = false;
+	bool bPendingLettuceGrant = false;
+	bool bPendingUpgradedWateringCanGrant = false;
+	bool bPendingSecondWateringCanGrant = false;
 	UPROPERTY(SaveGame)
 	bool bPendingUpgradedHoeGrant = false;
 	UPROPERTY(SaveGame)
@@ -110,4 +116,5 @@ private:
 	TArray<FPSItemStack> BagSlots;
 	UPROPERTY(SaveGame)
 	int32 UnlockedBagSlotCount = 10;
+	UPROPERTY(SaveGame) TSet<FName> DiscoveredGatheringItems;
 };

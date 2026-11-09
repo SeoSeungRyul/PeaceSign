@@ -31,16 +31,16 @@ bool FPSGatheringPreviewTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Preview seeds survive reload"), Inventory->CountItem(EPSItemType::TreeSeed), 6);
 
 	Inventory->ResetToDefaults();
-	TestTrue(TEXT("Existing bag fills"), Inventory->AddItem(EPSItemType::Stone, 9990));
+	TestTrue(TEXT("Existing bag fills"), Inventory->AddItem(EPSItemType::Stone, 8 * 999));
 	TestTrue(TEXT("Occupied bag expands without overwriting"), Inventory->GrantGatheringPreviewItems());
-	TestEqual(TEXT("Existing full bag retains every stone"), Inventory->CountItem(EPSItemType::Stone), 9990);
-	TestEqual(TEXT("Three rows accommodate existing ten stacks plus twelve new variants"), Inventory->GetUnlockedBagSlotCount(), 30);
+	TestEqual(TEXT("Existing full bag retains every stone"), Inventory->CountItem(EPSItemType::Stone), 8 * 999);
+	TestEqual(TEXT("Three rows accommodate existing ten occupied slots plus twelve new variants"), Inventory->GetUnlockedBagSlotCount(), 30);
 
 	Inventory->ResetToDefaults();
 	Inventory->UnlockedBagSlotCount = UPSInventoryComponent::MaxBagSlotCount;
-	TestTrue(TEXT("Maximum bag fills"), Inventory->AddItem(EPSItemType::Stone, 49950));
+	TestTrue(TEXT("Maximum bag fills"), Inventory->AddItem(EPSItemType::Stone, 48 * 999));
 	TestFalse(TEXT("Maximum full bag rejects grant atomically"), Inventory->GrantGatheringPreviewItems());
-	TestEqual(TEXT("No items lost on rejection"), Inventory->CountItem(EPSItemType::Stone), 49950);
+	TestEqual(TEXT("No items lost on rejection"), Inventory->CountItem(EPSItemType::Stone), 48 * 999);
 	TestEqual(TEXT("No partial logs on rejection"), Inventory->CountItem(EPSItemType::Wood), 0);
 	TestEqual(TEXT("No partial seeds on rejection"), Inventory->CountItem(EPSItemType::TreeSeed), 0);
 

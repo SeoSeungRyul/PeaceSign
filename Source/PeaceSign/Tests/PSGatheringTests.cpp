@@ -10,6 +10,7 @@
 #include "../PSPlayerStatsComponent.h"
 #include "../Inventory/PSInventoryComponent.h"
 #include "../Inventory/PSInventorySaveGame.h"
+#include "../Inventory/PSWorldItemActor.h"
 #include "../Time/PSGameTimeSubsystem.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
@@ -75,7 +76,7 @@ bool FPSGatheringTest::RunTest(const FString& Parameters)
 	const int32 Hits[] = {6, 5, 4, 4, 3, 3, 2, 2, 1};
 	for (int32 Tier = 1; Tier <= 9; ++Tier)
 	{
-		Resources->Trees[0] = Tree;
+		Resources->Trees = {Tree};
 		Resources->Drops.Reset();
 		const auto Axe = Resources->AxeDefinition(PSGathering::AxeId(Tier));
 		TestEqual(TEXT("Axe SP cost follows accumulated upgrades"), Axe.StaminaCost, Tier >= 6 ? 5.0f : 10.0f);
@@ -84,14 +85,14 @@ bool FPSGatheringTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("Valid axe strike succeeds"), Resources->Strike(Cell, Axe));
 			if (Hit + 1 < Hits[Tier - 1]) TestEqual(TEXT("Partial hits do not generate rewards"), Resources->Drops.Num(), 0);
 		}
-		TestEqual(TEXT("Axe reaches stump at specified hit count"), Resources->GetTree(Cell).Health, 0);
+		TestFalse(TEXT("The last hit removes the tree record"), Resources->HasTree(Cell));
 		TestEqual(TEXT("Felling creates log and seed rewards once"), Resources->Drops.Num(), 2);
-		TestFalse(TEXT("Stump cannot be struck again"), Resources->Strike(Cell, Axe));
-		TestFalse(TEXT("Stump cannot be shaken"), Resources->Shake(Cell));
-		TestEqual(TEXT("No duplicate rewards on stump"), Resources->Drops.Num(), 2);
+		TestFalse(TEXT("A felled tree cannot be struck again"), Resources->Strike(Cell, Axe));
+		TestFalse(TEXT("A felled tree cannot be shaken"), Resources->Shake(Cell));
+		TestEqual(TEXT("No duplicate felling rewards"), Resources->Drops.Num(), 2);
 	}
 
-	Resources->Trees[0] = Tree;
+	Resources->Trees = {Tree};
 	Resources->Drops.Reset();
 	auto* Clock = World->GetSubsystem<UPSGameTimeSubsystem>();
 	TestNotNull(TEXT("Game clock exists"), Clock);
@@ -124,7 +125,7 @@ bool FPSGatheringTest::RunTest(const FString& Parameters)
 	Inventory->ResetToDefaults();
 	TestEqual(TEXT("Starter axe is hotbar nine"), Inventory->GetHotbarSlot(8).ItemType, EPSItemType::Axe);
 	const FGuid SeedDrop = Resources->Drops[0].Id;
-	TestTrue(TEXT("Fill all bag slots"), Inventory->AddItem(EPSItemType::Stone, 9990));
+	TestTrue(TEXT("Fill all bag slots"), Inventory->AddItem(EPSItemType::Stone, 8 * 999));
 	TestFalse(TEXT("Full bag leaves persistent drop untouched"), Resources->CollectDrop(SeedDrop, Inventory));
 	TestEqual(TEXT("Full bag preserves pending rewards"), Resources->Drops.Num(), PendingCount);
 	Inventory->ResetToDefaults();
@@ -211,9 +212,109 @@ bool FPSGatheringTest::RunTest(const FString& Parameters)
 
 	Grid->SaveWorld();
 	Grid->LoadWorld();
-	TestEqual(TEXT("Felled stump remains felled after reload"), Resources->GetTree(Cell).Health, 0);
+	TestFalse(TEXT("Felled tree stays removed after reload"), Resources->HasTree(Cell));
 	const auto* Saved = Cast<UPSWorldSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
 	TestTrue(TEXT("Persistent drops recorded in world save"), Saved && Saved->GatheringDrops.Num() == RewardsBeforeFinalHit + 2);
+
+	// The same path used by right-click must spend only a valid, selected tree seed.
+	Controller->GridWorld = Grid;
+	Inventory->ResetToDefaults();
+	Pawn->SetActorLocation(Grid->CellToWorldCenter(FIntPoint(5, 6)) + FVector(0, 0, 90));
+	const FIntPoint Grass(5, 5);
+	const FIntPoint Water(5, 7);
+	const FIntPoint Dirt(4, 6);
+	const FIntPoint Rock(5, 8);
+	Grid->SetGroundTile(Water, EPSTileType::Water);
+	Grid->SetGroundTile(Dirt, EPSTileType::Dirt);
+	Grid->SetGroundTile(Rock, EPSTileType::Stone);
+	// Rebuild the active chunk so the water collision blocker is present.
+	Grid->UpdateActiveChunks(PSGrid::CellToChunk(Water, Grid->ChunkSize));
+	const auto MapleSeed = PSGathering::GetTree(EPSTreeSpecies::Maple).SeedId;
+	TestTrue(TEXT("Add three maple seeds"), Inventory->AddItemVariant(EPSItemType::TreeSeed, MapleSeed, 3));
+	TestTrue(TEXT("Equip seed stack from the bag"), Inventory->MoveItem(EPSInventoryArea::Bag, 0, EPSInventoryArea::Hotbar, 9));
+	Controller->SelectHotbarSlot(9);
+	TestEqual(TEXT("Tree seeds are usable hotbar items"), Controller->GetEquipment(), EPSEquipment::TreeSeed);
+	for (const FIntPoint Invalid : {Dirt, Rock, FIntPoint(5, 6), FIntPoint(5, 9)})
+	{
+		TestEqual(TEXT("Occupied, unsupported, underfoot or distant tiles reject planting"),
+			Controller->UseEquippedItemOnCell(Invalid), EPSTileInteractionResult::InvalidCell);
+	}
+	TestEqual(TEXT("Failed planting spends nothing"), Inventory->GetHotbarSlot(9).Quantity, 3);
+	TestEqual(TEXT("Plant on grass"), Controller->UseEquippedItemOnCell(Grass), EPSTileInteractionResult::Planted);
+	TestEqual(TEXT("Plant on water from shore"), Controller->UseEquippedItemOnCell(Water), EPSTileInteractionResult::Planted);
+	TestEqual(TEXT("Successful planting spends exactly one seed each"), Inventory->GetHotbarSlot(9).Quantity, 1);
+	TestEqual(TEXT("The water tile remains water"), Grid->GetGroundTile(Water), EPSTileType::Water);
+	TestEqual(TEXT("A sapling occupies its tile"), Grid->GetWorldObjectType(Grass), EPSWorldObjectType::Tree);
+	TestEqual(TEXT("The same tile cannot be planted twice"), Controller->UseEquippedItemOnCell(Grass), EPSTileInteractionResult::InvalidCell);
+	TestEqual(TEXT("New saplings have 10 HP"), Resources->GetTree(Grass).Health, 10);
+	TestFalse(TEXT("A sapling cannot be shaken"), Resources->Shake(Water));
+	const int64 MaturesAt = Resources->GetTree(Water).MaturesAtHalfHour;
+	TestEqual(TEXT("Growth takes two in-game days"), MaturesAt - Resources->Now(), PSGathering::SaplingGrowthTime);
+	Clock->RestoreClock(MaturesAt - 1, 0);
+	Grid->LoadWorld();
+	Resources->InitializeResources();
+	TestTrue(TEXT("The sapling survives reloading just before maturity"), Resources->GetTree(Water).IsSapling());
+	TestEqual(TEXT("The growth deadline survives reloading"), Resources->GetTree(Water).MaturesAtHalfHour, MaturesAt);
+	Clock->RestoreClock(MaturesAt, 0);
+	TestFalse(TEXT("Grass sapling matures on time"), Resources->GetTree(Grass).IsSapling());
+	TestFalse(TEXT("Water sapling matures on time"), Resources->GetTree(Water).IsSapling());
+	TestEqual(TEXT("The mature tree matches its seed"), Resources->GetTree(Water).Species, EPSTreeSpecies::Maple);
+	TestTrue(TEXT("The mature tree on water is reachable from shore"), Resources->CanReach(FIntPoint(5, 6), Water, Pawn));
+	const int32 PreviousDropCount = Resources->GetDrops().Num();
+	TestTrue(TEXT("Mature water tree can be felled"), Resources->Strike(Water, Resources->AxeDefinition(PSGathering::AxeId(9)), Pawn));
+	TestEqual(TEXT("Felling the water tree creates both reward stacks"), Resources->GetDrops().Num(), PreviousDropCount + 2);
+	for (int32 Index = PreviousDropCount; Index < Resources->GetDrops().Num(); ++Index)
+		TestEqual(TEXT("Water tree drops land where the player worked"), Resources->GetDrops()[Index].Cell, FIntPoint(5, 6));
+	TestEqual(TEXT("The original felling tile can be replanted"), Controller->UseEquippedItemOnCell(Cell), EPSTileInteractionResult::Planted);
+	Inventory->ResetToDefaults();
+	Controller->SelectHotbarSlot(8);
+	Pawn->StatsComponent->Stamina = 100;
+	const int32 DropsBeforeSapling = Resources->GetDrops().Num();
+	Action->HandleTree(Grid, Cell);
+	TestTrue(TEXT("Axe input starts a sapling cut"), Action->IsGatheringActive());
+	Action->Advance(0.61f);
+	TestFalse(TEXT("An axe removes the sapling"), Resources->HasTree(Cell));
+	TestEqual(TEXT("Sapling removal gives no wood or seeds"), Resources->GetDrops().Num(), DropsBeforeSapling);
+	TestEqual(TEXT("Sapling removal consumes axe durability"), Inventory->GetHotbarSlot(8).CurrentDurability, 99);
+
+	// Tile entry must work across the whole cell, independently of visual offsets and pawn height.
+	Inventory->ResetToDefaults();
+	FPSGatheringDrop TileDrop;
+	TileDrop.Id = FGuid::NewGuid();
+	TileDrop.Cell = FIntPoint(-3, -2);
+	TileDrop.Item.ItemType = EPSItemType::Wood;
+	TileDrop.Item.ItemId = TEXT("030101");
+	TileDrop.Item.Quantity = 3;
+	Resources->Restore({}, {TileDrop}, true, true);
+	const FVector DropCenter = Grid->CellToWorldCenter(TileDrop.Cell);
+	const float CellSize = Grid->GetCellSize();
+	const FTransform DropTransform(DropCenter + FVector(0.49f, 0.49f, 0.18f) * CellSize);
+	auto* DropActor = World->SpawnActorDeferred<APSWorldItemActor>(APSWorldItemActor::StaticClass(), DropTransform);
+	DropActor->InitializeGatheringItem(TileDrop.Item, Resources, TileDrop.Id, nullptr, CellSize, true);
+	DropActor->FinishSpawning(DropTransform);
+	Pawn->SetActorLocation(DropCenter + FVector(0.49f, 0.49f, 1) * CellSize);
+	DropActor->Tick(0.1f);
+	TestEqual(TEXT("Items stay on the ground while landing"), Resources->GetDrops().Num(), 1);
+	Pawn->SetActorLocation(DropCenter + FVector(0.51f, 0.49f, 1) * CellSize);
+	DropActor->Tick(1);
+	TestEqual(TEXT("Adjacent tile never collects across the boundary"), Inventory->CountItem(EPSItemType::Wood), 0);
+	TestEqual(TEXT("Adjacent tile leaves the saved drop intact"), Resources->GetDrops().Num(), 1);
+	TestTrue(TEXT("Fill the bag before entering the drop tile"), Inventory->AddItem(EPSItemType::Stone, 8 * 999));
+	Pawn->SetActorLocation(DropCenter + FVector(-0.49f, -0.49f, 1) * CellSize);
+	DropActor->Tick(0.01f);
+	TestEqual(TEXT("Full inventory keeps the drop after tile entry"), Resources->GetDrops().Num(), 1);
+	TestTrue(TEXT("Make room while standing on the drop tile"), Inventory->RemoveItem(EPSItemType::Stone, 999));
+	DropActor->Tick(0.01f);
+	TestEqual(TEXT("Same tile collects even far from the item artwork"), Inventory->CountItem(EPSItemType::Wood), 3);
+	TestTrue(TEXT("Pickup removes the saved drop"), Resources->GetDrops().IsEmpty());
+	TestTrue(TEXT("Pickup removes the world item actor"), DropActor->IsActorBeingDestroyed() || !IsValid(DropActor));
+
+	const FTransform GenericTransform(DropCenter + FVector(0.49f, 0.49f, 0.2f) * CellSize);
+	auto* GenericDrop = World->SpawnActorDeferred<APSWorldItemActor>(APSWorldItemActor::StaticClass(), GenericTransform);
+	GenericDrop->InitializeItem(TileDrop.Item, Grid);
+	GenericDrop->FinishSpawning(GenericTransform);
+	GenericDrop->Tick(0.01f);
+	TestEqual(TEXT("Ordinary item drops use the same tile entry rule"), Inventory->CountItem(EPSItemType::Wood), 6);
 	World->DestroyWorld(false);
 	UGameplayStatics::DeleteGameInSlot(Slot, 0);
 	UGameplayStatics::DeleteGameInSlot(Slot + TEXT("Inventory"), 0);

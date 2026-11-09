@@ -57,17 +57,22 @@ void APSFishingBobber::ShowCatch(UTexture2D* Texture)
 }
 
 void APSFishingBobber::UpdateVisual(const FVector& RodTip, const FVector& Landing, const bool bBiting,
-	const float Elapsed, const float RetrieveAlpha, const float FlightAlpha, const FVector& ArcUp)
+	const float WaterElapsed, const float RetrieveAlpha, const float FlightAlpha, const FVector& ArcUp)
 {
 	const float T = FMath::Clamp(FlightAlpha, 0.f, 1.f);
 	const FVector Up = ArcUp.GetSafeNormal();
 	// In the top-down orthographic camera, world Z is invisible. Bend towards
 	// screen-up instead, and keep both ends faster even when casting screen-up/down.
 	const float Height = FMath::Max(FMath::Max(0.f, CastArcHeight), .6f * FMath::Abs(FVector::DotProduct(Landing - RodTip, Up)));
-	const FVector FlightPosition = FMath::Lerp(RodTip, Landing, T)
+	FVector FloatPosition = FMath::Lerp(RodTip, Landing, T)
 		+ Up * (4 * Height * T * (1 - T));
-	FVector Position = FMath::Lerp(FlightPosition, RodTip, FMath::Clamp(RetrieveAlpha, 0.f, 1.f));
-	if (bBiting) Position.Y += FMath::Sin(Elapsed * BiteFrequency * 2 * PI) * BiteAmplitude;
+	if (T >= 1.f)
+	{
+		const float Phase = WaterElapsed * (2 * PI / FMath::Max(.1f, FloatPeriod));
+		FloatPosition += Up * (FMath::Sin(Phase) * FMath::Max(0.f, FloatAmplitude));
+	}
+	FVector Position = FMath::Lerp(FloatPosition, RodTip, FMath::Clamp(RetrieveAlpha, 0.f, 1.f));
+	if (bBiting) Position.Y += FMath::Sin(WaterElapsed * BiteFrequency * 2 * PI) * BiteAmplitude;
 	SetActorLocation(Position);
 	const FVector Delta = RodTip - Position;
 	LineMesh->SetWorldLocation((Position + RodTip) * .5);
